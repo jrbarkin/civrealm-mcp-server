@@ -1,0 +1,43 @@
+{
+  "model": "claude-opus-4-8",
+  "turns_played": 50,
+  "max_turns": 50,
+  "completed_without_crash": true,
+  "run_error": null,
+  "final_turn": 50,
+  "final_score": 16,
+  "final_units": 13,
+  "final_cities": 3,
+  "terminated": false,
+  "truncated": true,
+  "game_results": {},
+  "totals": {
+    "attempted": 603,
+    "applied": 503,
+    "illegal": 100,
+    "malformed": 0,
+    "duplicate": 0
+  },
+  "decisions_total": 603,
+  "illegal_action_rate": 0.166,
+  "applied_action_families": {
+    "found_city": 3,
+    "move": 193,
+    "set_tech_goal": 42,
+    "terrain_improve": 96,
+    "research_tech": 6,
+    "city_production": 67,
+    "unit_hold": 90,
+    "hut": 2,
+    "attack": 3,
+    "gov_rates": 1
+  },
+  "demonstrably_playing": {
+    "founded_cities": 3,
+    "unit_moves": 193,
+    "research_actions": 48,
+    "city_production_actions": 67,
+    "terrain_improvements": 96
+  },
+  "total_cost_usd": 4.7722
+}

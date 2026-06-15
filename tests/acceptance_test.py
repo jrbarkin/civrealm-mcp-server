@@ -71,7 +71,7 @@ def pick_legal_action(available: dict):
     return None
 
 
-async def main() -> int:
+async def main(client_port: int = 6001, max_turns: int = 4) -> int:
     server_params = StdioServerParameters(
         command=PYTHON,
         args=["-m", "civrealm_mcp.server"],
@@ -87,7 +87,7 @@ async def main() -> int:
             show("MCP TOOLS EXPOSED BY THE SERVER", [t.name for t in tools.tools])
 
             # 1) start_game
-            res = await session.call_tool("start_game", {"client_port": 6001, "max_turns": 4})
+            res = await session.call_tool("start_game", {"client_port": client_port, "max_turns": max_turns})
             started = payload(res)
             show("start_game -> initial status (BEFORE any action)", started)
             if started.get("_isError"):
@@ -154,4 +154,10 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(anyio.run(main))
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Drive a CivRealm game purely through MCP tools")
+    ap.add_argument("--port", type=int, default=6001, help="freeciv client_port (default 6001)")
+    ap.add_argument("--max-turns", type=int, default=4)
+    a = ap.parse_args()
+    raise SystemExit(anyio.run(main, a.port, a.max_turns))

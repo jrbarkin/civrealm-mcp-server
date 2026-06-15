@@ -94,3 +94,78 @@ via the existing tools. Concretely:
 See **[SETUP.md](SETUP.md)** for exact commands. Short version: start the Docker server
 (`docker run -d --name freeciv-web --rm -p 8080:80 freeciv/freeciv-web:latest`), then
 `.venv/bin/python tests/acceptance_test.py`.
+
+---
+
+# Update (2026-06-15): Single-agent play loop — can one LLM actually play?
+
+A second task: a headless loop that plays ONE game vs the built-in AI by looping
+observe → shape state + legal actions → ask an LLM for moves → apply the legal ones → end turn,
+until a turn cap. This is a **viability probe** (coherence, not winning).
+
+## What was built
+- **Shared engine** `src/civrealm_mcp/core.py` (`CivRealmGame`) — the MCP server was refactored
+  to drive through it, so the play loop and the MCP server use **one env-access layer**. (The MCP
+  acceptance test was re-run after the refactor — still passes, no regression.)
+- **Shaping layer** `playloop/representation.py` + **[REPRESENTATION.md](REPRESENTATION.md)** +
+  a real `EXAMPLE_SHAPED_STATE.txt`. Condenses the raw observation into a compact strategic
+  summary + your cities/units + per-actor **exact legal actions** (cryptic `goto_*` keys annotated
+  with compass directions). Raw→shaped stays debuggable (full raw snapshot saved for turn 1).
+- **Contestant** `playloop/contestant.py` — one configurable slot. Instead of the paid API it
+  **spawns an isolated `claude` subagent per turn** (`claude -p ... --output-format json`,
+  tools disabled), using this environment's auth. Probe model: **Claude Opus 4.8** (strong, so a
+  flail implicates our representation, not the model).
+- **Loop + metrics + transcript** `playloop/loop.py` → `playloop/runs/<ts>/{metrics.jsonl,
+  transcript.json,summary.json}`.
+
+## The real run (50 turns, Opus 4.8, `playloop/runs/main/`)
+Acceptance: **complete the cap without crashing**, **illegal-action rate < 15%**, **demonstrably
+playing**.
+
+| metric | result |
+|---|---|
+| turns completed | **50 / 50, no crash** ✅ |
+| score | **0 → 16** |
+| cities founded | **3** (turns 1, 4, 23) |
+| units | 5 → 13 |
+| demonstrably playing | 193 unit moves, 96 terrain improvements, 67 city-production actions, 48 research actions, 3 cities, 3 attacks, 2 huts entered ✅ |
+| illegal-action rate | **16.6% overall** (100/603), mean per-turn **14.5%** — borderline vs <15% |
+| cost | ~$4.77 (50 subagent calls) |
+
+**Honest read — is it playing or flailing? Playing, clearly.** It expands, improves terrain,
+manages city production, and steers research across all 50 turns; the early game is near-flawless
+(turns 1–13: ~0 illegal). It does *not* no-op or end turns immediately.
+
+## The single biggest obstacle (and the design point)
+**92 of 100 illegal proposals are one confusion:** the model reaches for `fortify` to "hold" a
+unit, but for units mid-activity the legal hold action is `keep_activity`/`cancel_order`, not
+`fortify`. (6 were blocked-direction `goto`s; 2 misc.) It worsens late-game purely because there
+are more idle units to mishandle — the documented "control many units" difficulty, narrowed to
+one fixable semantic gap. **0 illegal proposals targeted a non-actionable actor** — the model is
+not commanding dead units.
+
+Important framing: **illegal proposals are never executed** — the loop validates every move
+against `info['available_actions']` and only applies legal ones, so gameplay is always valid. The
+16.6% is a *diagnostic of how faithfully the model copies from the presented valid-options list*,
+not bad moves hitting the board. The choice was left unconstrained on purpose so the probe could
+*find* representation gaps like this; a production head-to-head would instead **constrain
+selection to the presented options** (enum/numbered choice → illegal rate structurally 0).
+
+Two concrete fixes, both validated against the captured data (`all 92 fortify-illegals had
+keep_activity listed`):
+1. **Map the hold action**: alias `fortify → keep_activity` when fortify isn't legal (and label
+   the hold option clearly in the representation). Applying this to the run's data resolves 92/100
+   → **projected illegal rate 1.3%** (8/603), well under target.
+2. **Constrain selection** to the offered keys (the env layer already supports this via
+   `available_actions`).
+
+Neither was applied here (the task says stop and report after the run); both are one-evening changes.
+
+## Deliverables (this task)
+`src/civrealm_mcp/core.py`, `playloop/{representation,contestant,loop}.py`,
+`REPRESENTATION.md`, `EXAMPLE_SHAPED_STATE.txt`, and the real run under `playloop/runs/main/`
+(`metrics.jsonl` + `transcript.json` + `summary.json`).
+
+## Reproduce
+Docker server up (see SETUP.md), then:
+`.venv/bin/python -m playloop.loop --max-turns 50` (or a smaller cap to validate quickly).

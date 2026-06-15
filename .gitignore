@@ -19,6 +19,9 @@ screenshots/
 *.sav
 geckodriver.log
 
+# Play-loop run outputs (the canonical real run is force-added: playloop/runs/main)
+playloop/runs/
+
 # Captured/generated samples (kept small ones are committed explicitly)
 *.pkl
 
