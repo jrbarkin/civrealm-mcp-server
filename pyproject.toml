@@ -1,0 +1,30 @@
+[project]
+name = "civrealm-mcp-server"
+version = "0.1.0"
+description = "A minimal Model Context Protocol (MCP) server exposing a single CivRealm (Freeciv) Gymnasium environment as tools, so an external agent can drive one game by hand over MCP."
+readme = "README.md"
+requires-python = ">=3.10,<3.12"
+license = { text = "MIT" }
+authors = [{ name = "civrealm-mcp-server" }]
+keywords = ["mcp", "civrealm", "freeciv", "gymnasium", "agent"]
+
+dependencies = [
+    # The CivRealm Gymnasium environment (single env; we only use FreecivBase-v0).
+    "civrealm==0.1.2",
+    # Official MCP Python SDK (FastMCP, stdio transport). Needs Python >=3.10.
+    "mcp>=1.2.0",
+    # ray==2.6.3 (a transitive civrealm dep on Python <3.12) imports the deprecated
+    # `pkg_resources` at import time; setuptools>=81 removed it. Pin below 81.
+    "setuptools<81",
+]
+
+[project.scripts]
+# stdio MCP server entry point
+civrealm-mcp-server = "civrealm_mcp.server:main"
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual envs
+.venv/
+venv/
+
+# CivRealm runtime artifacts
+logs/
+plot_game_scores/
+game_scores/
+recordings/
+screenshots/
+*.sav
+geckodriver.log
+
+# Captured/generated samples (kept small ones are committed explicitly)
+*.pkl
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
