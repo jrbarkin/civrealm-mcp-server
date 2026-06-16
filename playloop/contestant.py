@@ -129,10 +129,16 @@ class OllamaContestant:
     Ollama wraps llama.cpp, not MLX). Default: llama3.2:1b (Llama-3.2-1B-Instruct).
 
     Uses Ollama's chat API with format="json" (forces valid JSON output — important for a 1B model).
-    Same interface as the other contestants: choose() / choose_constrained()."""
+    Same interface as the other contestants: choose() / choose_constrained().
+
+    `think=False` is REQUIRED for the 4B gameplay models (qwen3:4b, gemma4:e4b). They are
+    "thinking" models that, left on, spend the entire num_predict budget on the hidden
+    `message.thinking` channel and return an EMPTY `message.content` (done_reason=length) — i.e.
+    no answer at all. Disabling thinking makes them emit the JSON answer directly (and far
+    faster: qwen3:4b 24s -> 2.5s). It is a harmless no-op on non-thinking models (llama3.2:1b)."""
 
     def __init__(self, model: str = "llama3.2:1b", host: str | None = None,
-                 max_tokens: int = 320, timeout: int = 180):
+                 max_tokens: int = 320, timeout: int = 180, think: bool = False):
         self.model = model
         host = host or os.environ.get("OLLAMA_HOST") or "http://localhost:11434"
         if "://" not in host:
@@ -140,6 +146,7 @@ class OllamaContestant:
         self.host = host.rstrip("/")
         self.max_tokens = max_tokens
         self.timeout = timeout
+        self.think = think
 
     def name(self) -> str:
         return f"ollama:{self.model}"
@@ -156,6 +163,9 @@ class OllamaContestant:
             # fmt may be "json" (syntactic) or a full JSON Schema dict (structured-output /
             # grammar-constrained decoding — see representation.menu_to_schema).
             "format": fmt or "json",
+            # Disable the reasoning channel so the model spends tokens on the answer, not on
+            # hidden thinking (the 4B models return empty content otherwise — see class docstring).
+            "think": self.think,
             "options": {"temperature": 0, "num_predict": self.max_tokens},
         }
         t = time.time()
