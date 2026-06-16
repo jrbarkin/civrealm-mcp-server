@@ -39,13 +39,33 @@ Respond with ONLY a JSON object — no prose, no markdown, no code fences:
 "actor_id": "101", "action": "build_city"}]}
 "moves" may be empty only if genuinely nothing is worth doing."""
 
+CONSTRAINED_SYSTEM_PROMPT = """You are an expert player of Freeciv (a Civilization-style 4X \
+strategy game), playing one turn at a time against built-in AI opponents.
+
+You are shown your situation and, for each of your actors (units, cities, tech, government), a \
+NUMBERED menu listing the ONLY actions available to that actor THIS turn. Option 0 is always \
+"skip" (do nothing). Because you pick option numbers, you cannot make an illegal move.
+
+Goal: build a thriving civilization — found cities with Settlers units, explore by moving units, \
+improve terrain with Workers, research technology. Act with most units every turn; found cities \
+when you can; don't leave units idle without reason.
+
+Choose ONE option number for each actor you want to act (omit an actor, or choose 0, to skip it). \
+Pick only numbers shown in that actor's menu.
+
+Respond with ONLY a JSON object — no prose, no markdown, no code fences:
+{"plan": "<one short sentence>", "choices": {"unit:104": 1, "city:110": 2, "tech:cur_player": 5}}
+Keys are the actor ids exactly as shown (e.g. "unit:104"); values are the chosen option NUMBER \
+from that actor's menu."""
+
 DISALLOWED_TOOLS = ["Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebSearch", "WebFetch",
                     "Task", "NotebookEdit", "TodoWrite"]
 
 
 @dataclass
 class ChoiceResult:
-    moves: list[dict]
+    moves: list[dict] | None = None       # free-form mode: [{ctrl_type, actor_id, action}]
+    choices: dict | None = None           # constrained mode: {actor_key: option_int}
     plan: str = ""
     raw: str = ""
     error: str | None = None
@@ -91,44 +111,58 @@ class ClaudeSubagentContestant:
     def name(self) -> str:
         return f"claude-subagent:{self.model}"
 
-    def choose(self, state_text: str) -> ChoiceResult:
-        cmd = [
-            "claude", "-p", state_text,
-            "--output-format", "json",
-            "--model", self.model,
-            "--system-prompt", SYSTEM_PROMPT,
-            "--disallowed-tools", *DISALLOWED_TOOLS,
-        ]
+    def _invoke(self, prompt: str, system_prompt: str):
+        """Run one `claude -p` subagent. Returns (parsed_json|None, error|None, raw, ms, cost)."""
+        cmd = ["claude", "-p", prompt, "--output-format", "json", "--model", self.model,
+               "--system-prompt", system_prompt, "--disallowed-tools", *DISALLOWED_TOOLS]
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout)
         except subprocess.TimeoutExpired:
-            return ChoiceResult(moves=[], error=f"subagent timeout after {self.timeout}s")
+            return None, f"subagent timeout after {self.timeout}s", "", None, None
         except FileNotFoundError:
-            return ChoiceResult(moves=[], error="claude CLI not found on PATH")
-
+            return None, "claude CLI not found on PATH", "", None, None
         if proc.returncode != 0:
-            return ChoiceResult(moves=[], error=f"claude rc={proc.returncode}: {proc.stderr[-300:]}",
-                                raw=proc.stdout[-500:])
-
+            return None, f"claude rc={proc.returncode}: {proc.stderr[-300:]}", proc.stdout[-500:], None, None
         try:
             env = json.loads(proc.stdout)
         except json.JSONDecodeError:
-            return ChoiceResult(moves=[], error="could not parse claude envelope", raw=proc.stdout[-500:])
-
+            return None, "could not parse claude envelope", proc.stdout[-500:], None, None
         result_text = env.get("result", "")
-        duration = env.get("duration_ms")
-        cost = env.get("total_cost_usd")
+        duration, cost = env.get("duration_ms"), env.get("total_cost_usd")
         if env.get("is_error"):
-            return ChoiceResult(moves=[], error=f"claude is_error: {result_text[:300]}",
-                                raw=result_text, duration_ms=duration, cost_usd=cost)
-
+            return None, f"claude is_error: {result_text[:300]}", result_text, duration, cost
         parsed = _extract_json_object(result_text)
         if parsed is None:
-            return ChoiceResult(moves=[], error="could not parse JSON moves from result",
-                                raw=result_text[:1000], duration_ms=duration, cost_usd=cost)
+            return None, "could not parse JSON from result", result_text[:1000], duration, cost
+        return parsed, None, result_text[:1000], duration, cost
 
+    def choose(self, state_text: str) -> ChoiceResult:
+        """Free-form mode: returns moves [{ctrl_type, actor_id, action}]."""
+        parsed, error, raw, ms, cost = self._invoke(state_text, SYSTEM_PROMPT)
+        if parsed is None:
+            return ChoiceResult(moves=[], error=error, raw=raw, duration_ms=ms, cost_usd=cost)
         moves = parsed.get("moves", [])
         if not isinstance(moves, list):
             moves = []
-        return ChoiceResult(moves=moves, plan=str(parsed.get("plan", "")),
-                            raw=result_text[:1000], duration_ms=duration, cost_usd=cost)
+        return ChoiceResult(moves=moves, plan=str(parsed.get("plan", "")), raw=raw,
+                            duration_ms=ms, cost_usd=cost)
+
+    def choose_constrained(self, menu_text: str) -> ChoiceResult:
+        """Constrained mode: returns choices {actor_key: option_int} over a per-actor menu."""
+        parsed, error, raw, ms, cost = self._invoke(menu_text, CONSTRAINED_SYSTEM_PROMPT)
+        if parsed is None:
+            return ChoiceResult(choices={}, error=error, raw=raw, duration_ms=ms, cost_usd=cost)
+        raw_choices = parsed.get("choices", {})
+        norm: dict[str, object] = {}
+        if isinstance(raw_choices, dict):
+            for k, v in raw_choices.items():
+                norm[str(k)] = v
+        elif isinstance(raw_choices, list):  # tolerate [{"actor":..,"option":..}]
+            for item in raw_choices:
+                if isinstance(item, dict):
+                    actor = item.get("actor") or item.get("actor_key")
+                    opt = item.get("option", item.get("choice", item.get("id")))
+                    if actor is not None:
+                        norm[str(actor)] = opt
+        return ChoiceResult(choices=norm, plan=str(parsed.get("plan", "")), raw=raw,
+                            duration_ms=ms, cost_usd=cost)

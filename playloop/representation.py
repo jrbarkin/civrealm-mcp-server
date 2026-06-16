@@ -149,25 +149,25 @@ def shape(game) -> ShapedState:
                        actionable=actionable, dropped_actions=dropped)
 
 
-def render(s: ShapedState) -> str:
-    """Render the shaped state as the compact text shown to the contestant."""
+def _summary_lines(s: ShapedState) -> list[str]:
+    """The strategic-summary header block, shared by render() and render_menu()."""
     sm = s.summary
-    lines: list[str] = []
-    lines.append(f"=== CivRealm — turn {sm.get('turn')} of {sm.get('max_turns')} ===")
-    lines.append(
-        f"You are player {sm.get('player_id')} \"{sm.get('name')}\". "
-        f"Score {sm.get('score')}. Gold {sm.get('gold')}. Government: {sm.get('government')}. "
-        f"Rates tax/sci/lux {sm.get('tax')}/{sm.get('science')}/{sm.get('luxury')}."
-    )
-    lines.append(
-        f"Researching: {sm.get('research_name')} "
-        f"({sm.get('bulbs_researched')}/{sm.get('researching_cost')} bulbs). "
-        f"Techs known: {sm.get('techs_researched')}."
-    )
-    lines.append(
-        f"You have {sm.get('num_cities')} cities and {sm.get('num_units')} units. "
-        f"Coordinates are (x=column, y=row); North is up (decreasing y)."
-    )
+    return [
+        f"=== CivRealm — turn {sm.get('turn')} of {sm.get('max_turns')} ===",
+        (f"You are player {sm.get('player_id')} \"{sm.get('name')}\". "
+         f"Score {sm.get('score')}. Gold {sm.get('gold')}. Government: {sm.get('government')}. "
+         f"Rates tax/sci/lux {sm.get('tax')}/{sm.get('science')}/{sm.get('luxury')}."),
+        (f"Researching: {sm.get('research_name')} "
+         f"({sm.get('bulbs_researched')}/{sm.get('researching_cost')} bulbs). "
+         f"Techs known: {sm.get('techs_researched')}."),
+        (f"You have {sm.get('num_cities')} cities and {sm.get('num_units')} units. "
+         f"Coordinates are (x=column, y=row); North is up (decreasing y)."),
+    ]
+
+
+def render(s: ShapedState) -> str:
+    """Render the shaped state as the compact text shown to the contestant (free-form mode)."""
+    lines: list[str] = _summary_lines(s)
 
     units_by_id = {str(u["id"]): u for u in s.units}
     cities_by_id = {str(c["id"]): c for c in s.cities}
@@ -222,3 +222,73 @@ def raw_snapshot(game) -> dict:
     if "map" in obs:
         raw_obs["map"] = "<omitted: large numpy arrays>"
     return {"obs": raw_obs, "info": jsonable(game.info)}
+
+
+# ============================ Constrained-selection menu ============================
+# Instead of free-form action strings, the contestant picks an option NUMBER from a small,
+# per-actor menu of that actor's legal actions. Option 0 is always "skip". Because the model
+# returns indices into the legal set, an illegal action is impossible by construction. We group
+# per actor (not one flat 300-item list) so each decision is over a small, legible option set,
+# while still using a single subagent call per turn.
+
+@dataclass
+class ChoiceMenu:
+    summary_lines: list[str]
+    # ordered render rows: (actor_key, header, [(option_int, annotated_action_label)])
+    actors: list[tuple[str, str, list[tuple[int, str]]]]
+    # actor_key -> {option_int -> (ctrl_type, actor_id_str, action_key)};  option 0 -> None (skip)
+    index: dict[str, dict[int, tuple[str, str, str] | None]]
+    dropped_actions: dict = field(default_factory=dict)
+
+    def num_actors(self) -> int:
+        return len(self.actors)
+
+
+def build_choice_menu(game) -> ChoiceMenu:
+    """Build a per-actor numbered menu over the turn's legal actions, plus an index to resolve
+    a chosen (actor_key, option_int) back to a concrete (ctrl_type, actor_id, action_key)."""
+    s = shape(game)
+    units_by = {str(u["id"]): u for u in s.units}
+    cities_by = {str(c["id"]): c for c in s.cities}
+
+    actors: list[tuple[str, str, list[tuple[int, str]]]] = []
+    index: dict[str, dict[int, tuple[str, str, str] | None]] = {}
+
+    for ctrl_type in CTRL_ORDER:
+        for actor_id, acts in (s.actionable.get(ctrl_type) or {}).items():
+            actor_key = f"{ctrl_type}:{actor_id}"
+            opt_index: dict[int, tuple[str, str, str] | None] = {0: None}
+            rendered: list[tuple[int, str]] = [(0, "skip")]
+            for i, a in enumerate(acts, start=1):
+                opt_index[i] = (ctrl_type, actor_id, a)
+                rendered.append((i, _annotate(a)))
+            index[actor_key] = opt_index
+
+            if ctrl_type == "unit" and actor_id in units_by:
+                u = units_by[actor_id]
+                header = f"{actor_key}  {u['type']} at ({u['x']},{u['y']}) moves {u['moves_left']}"
+            elif ctrl_type == "city" and actor_id in cities_by:
+                c = cities_by[actor_id]
+                header = (f"{actor_key}  \"{c['name']}\" at ({c['x']},{c['y']}) size {c['size']} "
+                          f"producing {c['producing']}")
+            else:
+                header = actor_key
+            actors.append((actor_key, header, rendered))
+
+    return ChoiceMenu(summary_lines=_summary_lines(s), actors=actors, index=index,
+                      dropped_actions=s.dropped_actions)
+
+
+def render_menu(menu: ChoiceMenu) -> str:
+    """Render the numbered per-actor choice menu shown to the contestant (constrained mode)."""
+    lines = list(menu.summary_lines)
+    lines.append("\nChoose ONE option NUMBER for each actor below (0 = skip). You may only pick "
+                 "numbers shown for that actor — so every choice is a legal move.")
+    for actor_key, header, opts in menu.actors:
+        lines.append("")
+        lines.append(header)
+        lines.append("   " + "   ".join(f"{n}) {label}" for n, label in opts))
+    if menu.dropped_actions:
+        drop = ", ".join(f"{k} (+{n} more not shown)" for k, n in menu.dropped_actions.items())
+        lines.append(f"\n[note: some actors had more than {ACTION_CAP} legal actions; truncated: {drop}]")
+    return "\n".join(lines)

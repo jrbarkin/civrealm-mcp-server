@@ -44,11 +44,13 @@ full map arrays, the tech tree, and per-tile terrain are intentionally omitted �
   model is told to return the token *before* the bracket (`goto_1`). This keeps the
   illegal-action rate a measurement of *the model reading our representation*, not of us
   translating its free-text back into keys.
-- **We do NOT enum-constrain the choice.** The contestant returns free-form action strings; the
-  loop checks each against `info['available_actions']`. If we hard-constrained to an enum the
-  illegal rate would be 0 by construction and meaningless. (As a small robustness courtesy the
-  loop will still map an obvious alias back to its key — e.g. `move_North` → `goto_1`, or a
-  spacing variant — and counts it legal; this is logged per move in the transcript.)
+- **Two selection modes** (see "Constrained selection mode" below). The original probe used
+  **free-form** strings (no enum) on purpose, so the illegal-action rate was a real measurement of
+  how clearly the representation reads. That confound (illegal rate also measures format adherence,
+  and varies by model — Opus 16.6% vs Sonnet ~1%) is now closed by the default **constrained** mode,
+  which presents numbered options and takes an index, making an illegal action impossible by
+  construction. Free-form remains available via `--mode freeform` for comparison; in it the loop
+  still maps an obvious alias back to its key (`move_North` → `goto_1`, spacing variants).
 - **Legality is surfaced fresh every turn.** `available_actions` is rebuilt each step, and only
   actors that can currently act appear — so the model never sees a unit with 0 moves as actionable.
 - **Per-actor action lists are capped at `ACTION_CAP = 60`**, and any overflow is reported in
@@ -70,6 +72,32 @@ A turn is many actions then `end_turn`. Each turn:
 A batch (whole-turn) decision — rather than one subagent call per actor — is both the harder,
 more honest test of the representation (can the model command *all* its units coherently at
 once, the documented failure case?) and far cheaper (one subagent call per turn).
+
+## Constrained selection mode (default)
+
+To make an illegal action **impossible by construction** — and to stop the illegal-action rate
+from conflating skill with format adherence — the default mode presents a **per-actor numbered
+menu** of that actor's legal actions and the contestant returns an **option number** per actor.
+The action strings never come from the model, so it cannot propose anything illegal.
+
+- `build_choice_menu(game)` produces, per actionable actor (keyed `unit:104`, `city:110`,
+  `tech:cur_player`, `gov:0`), a small numbered menu —
+  `0) skip   1) build_city   2) goto_1 [move_North]   3) ...` — plus an index mapping
+  `(actor_key, option_int) → (ctrl_type, actor_id, action_key)`. Option `0` is always "skip".
+- The contestant returns `{"choices": {"unit:104": 1, "city:110": 2, "tech:cur_player": 5}}` —
+  numbers only.
+- **Grouped per actor, not a flat list.** A turn can have many actors × moves; we present one small
+  menu per actor (so each decision is over a legible option set) while still using ONE subagent call
+  per turn (cost-efficient). Tech's large set is still capped at `ACTION_CAP` with the overflow noted.
+- The loop (`apply_constrained`) resolves each number via the index and applies it, re-checking
+  legality as a safety/bug guard. Counters: `applied`, `skipped` (option 0), `bad_index` (number not
+  in that actor's menu), `unknown_actor` (actor key not in the menu), `duplicate`, and `illegal`
+  (legal at menu-build but not at apply — a rare cross-actor staleness; expected ~0).
+
+**Applied illegal actions are 0 by construction.** Any non-zero `illegal` / `bad_index` /
+`unknown_actor` indicates an index or parse bug (or a contestant returning a malformed number),
+not legitimate "illegal play" — those are tracked separately (`selection_errors`) and should be
+driven to ~0.
 
 ## Raw → shaped is debuggable
 

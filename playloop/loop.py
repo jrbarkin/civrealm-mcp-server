@@ -2,19 +2,22 @@
 Headless single-agent play loop over CivRealm.
 
 Plays ONE game vs the built-in AI by looping:
-    observe -> shape state + legal actions -> ask the contestant (an LLM subagent) for moves
-    -> apply the legal ones -> end the turn,
+    observe -> shape state + legal actions -> ask the contestant for action(s) -> apply -> end turn,
 until a turn cap (default 50) or game end.
 
-This is a viability probe: the question is whether ONE LLM, driving through our env + shaping
-layer, can play coherently for many turns — not whether it wins. We measure the illegal-action
-rate and whether it is demonstrably playing (founding cities, moving units, setting research).
+Two contestant modes:
+  - constrained (default): the contestant picks an option NUMBER from a per-actor menu of that
+    actor's legal actions, so an illegal action is impossible by construction (Part A).
+  - freeform: the contestant returns free-form action strings (kept for comparison).
+
+At game end the score-based win rule's final result is read and logged (Part B).
 
 Per-turn metrics -> <out>/metrics.jsonl, full transcript -> <out>/transcript.json,
 aggregate -> <out>/summary.json. Drives the same env layer as the MCP server (civrealm_mcp.core).
 
 Usage:
-    .venv/bin/python -m playloop.loop --max-turns 50 [--model claude-opus-4-8] [--client-port 6001]
+    .venv/bin/python -m playloop.loop --max-turns 50 [--mode constrained|freeform]
+                                      [--model claude-sonnet-4-6] [--client-port 6001]
 """
 
 from __future__ import annotations
@@ -29,7 +32,8 @@ from collections import Counter
 
 from civrealm_mcp.core import COMPASS_TO_GOTO, CivRealmGame
 from playloop.contestant import ClaudeSubagentContestant
-from playloop.representation import raw_snapshot, render, shape
+from playloop.representation import build_choice_menu, raw_snapshot, render, render_menu, shape
+from playloop.winrule import DEFAULT_PRIMARY, DEFAULT_TIEBREAK, get_final_result
 
 
 def _log(msg: str) -> None:
@@ -37,14 +41,13 @@ def _log(msg: str) -> None:
 
 
 def normalize_action(game: CivRealmGame, ctrl_type: str, actor_id: str, action: str) -> str:
-    """Map a model's action onto a legal key when it used a readable alias / spacing variant."""
+    """Map a model's free-form action onto a legal key when it used an alias / spacing variant."""
     if game.is_legal(ctrl_type, actor_id, action):
         return action
-    candidates = [COMPASS_TO_GOTO.get(action), action.replace(" ", "_"), action.replace("_", " ")]
-    for c in candidates:
+    for c in (COMPASS_TO_GOTO.get(action), action.replace(" ", "_"), action.replace("_", " ")):
         if c and game.is_legal(ctrl_type, actor_id, c):
             return c
-    return action  # unchanged -> will be judged illegal
+    return action
 
 
 def action_family(action: str) -> str:
@@ -73,7 +76,111 @@ def action_family(action: str) -> str:
     return a.split("_")[0] if a else "unknown"
 
 
-def play(max_turns: int, client_port: int, username: str, model: str, out_dir: str) -> dict:
+def apply_freeform(game: CivRealmGame, choice) -> dict:
+    acted: set[tuple[str, str]] = set()
+    c: Counter = Counter()
+    per_move: list[dict] = []
+    fam: Counter = Counter()
+    run_error = None
+    moves = choice.moves or []
+    for m in moves:
+        if game.done:
+            break
+        if not isinstance(m, dict) or not m.get("ctrl_type") or m.get("actor_id") is None or not m.get("action"):
+            c["malformed"] += 1
+            per_move.append({"move": m, "outcome": "malformed"})
+            continue
+        ct, aid, act = m["ctrl_type"], str(m["actor_id"]), str(m["action"])
+        if (ct, aid) in acted:
+            c["duplicate"] += 1
+            per_move.append({"move": m, "outcome": "duplicate_actor"})
+            continue
+        nact = normalize_action(game, ct, aid, act)
+        if game.is_legal(ct, aid, nact):
+            try:
+                game.take_action(ct, aid, nact)
+            except Exception as e:
+                run_error = f"env error on take_action {(ct, aid, nact)}: {e!r}"
+                per_move.append({"move": m, "outcome": "env_error", "error": repr(e)})
+                break
+            c["applied"] += 1
+            acted.add((ct, aid))
+            fam[action_family(nact)] += 1
+            per_move.append({"move": m, "resolved": nact, "outcome": "applied"})
+        else:
+            c["illegal"] += 1
+            per_move.append({"move": m, "resolved": nact, "outcome": "illegal",
+                             "valid_sample": game.legal_actions_for(ct, aid)[:8]})
+    return {"attempted": len(moves), "applied": c["applied"], "illegal": c["illegal"],
+            "malformed": c["malformed"], "duplicate": c["duplicate"], "skipped": 0,
+            "stale": 0, "bad_index": 0, "unknown_actor": 0, "per_move": per_move, "families": fam,
+            "run_error": run_error, "parsed": moves}
+
+
+def apply_constrained(game: CivRealmGame, menu, choice) -> dict:
+    """Apply the contestant's option-number choices. Illegal actions are impossible by
+    construction; the only paths to a non-zero illegal count are index/parse bugs (tracked
+    separately) or a rare cross-actor staleness, which we also count."""
+    acted: set[tuple[str, str]] = set()
+    c: Counter = Counter()
+    per_move: list[dict] = []
+    fam: Counter = Counter()
+    run_error = None
+    choices = choice.choices or {}
+    attempted = 0
+    for actor_key, opt in choices.items():
+        if game.done:
+            break
+        if actor_key not in menu.index:
+            c["unknown_actor"] += 1
+            per_move.append({"actor": actor_key, "opt": opt, "outcome": "unknown_actor"})
+            continue
+        try:
+            opt_i = int(opt)
+        except (TypeError, ValueError):
+            c["bad_index"] += 1
+            per_move.append({"actor": actor_key, "opt": opt, "outcome": "bad_index"})
+            continue
+        if opt_i == 0:
+            c["skipped"] += 1
+            per_move.append({"actor": actor_key, "opt": 0, "outcome": "skip"})
+            continue
+        if opt_i not in menu.index[actor_key]:
+            c["bad_index"] += 1
+            per_move.append({"actor": actor_key, "opt": opt_i, "outcome": "bad_index"})
+            continue
+        attempted += 1
+        ct, aid, act = menu.index[actor_key][opt_i]
+        if (ct, str(aid)) in acted:
+            c["duplicate"] += 1
+            per_move.append({"actor": actor_key, "opt": opt_i, "outcome": "duplicate_actor"})
+            continue
+        if game.is_legal(ct, aid, act):
+            try:
+                game.take_action(ct, aid, act)
+            except Exception as e:
+                run_error = f"env error on take_action {(ct, aid, act)}: {e!r}"
+                per_move.append({"actor": actor_key, "action": act, "outcome": "env_error", "error": repr(e)})
+                break
+            c["applied"] += 1
+            acted.add((ct, str(aid)))
+            fam[action_family(act)] += 1
+            per_move.append({"actor": actor_key, "opt": opt_i, "action": act, "outcome": "applied"})
+        else:
+            # Legal when the menu was built, but an earlier same-turn action changed it (e.g.
+            # founding a city under stacked units changes the co-located units' legal set). This is
+            # a benign sequencing artifact, NOT an illegal proposal — the model picked a then-legal
+            # option. Count it separately and skip it, so `illegal` stays 0 by construction.
+            c["stale"] += 1
+            per_move.append({"actor": actor_key, "opt": opt_i, "action": act, "outcome": "stale_skipped"})
+    return {"attempted": attempted, "applied": c["applied"], "illegal": 0, "stale": c["stale"],
+            "malformed": 0, "duplicate": c["duplicate"], "skipped": c["skipped"],
+            "bad_index": c["bad_index"], "unknown_actor": c["unknown_actor"],
+            "per_move": per_move, "families": fam, "run_error": run_error, "parsed": choices}
+
+
+def play(max_turns: int, client_port: int, username: str, model: str, out_dir: str,
+         mode: str = "constrained", primary_metric: str = DEFAULT_PRIMARY) -> dict:
     os.makedirs(out_dir, exist_ok=True)
     metrics_path = os.path.join(out_dir, "metrics.jsonl")
     transcript_path = os.path.join(out_dir, "transcript.json")
@@ -81,15 +188,16 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
 
     contestant = ClaudeSubagentContestant(model=model)
     game = CivRealmGame()
-    _log(f"[loop] starting game: port={client_port} max_turns={max_turns} model={model}")
+    _log(f"[loop] start: port={client_port} max_turns={max_turns} model={model} mode={mode}")
     game.start(client_port=client_port, max_turns=max_turns, username=username)
     _log(f"[loop] reset done. my_player_id={game.my_player_id()} turn={game.turn}")
 
     metrics: list[dict] = []
     transcript: list[dict] = []
-    totals = Counter()
+    totals: Counter = Counter()
     applied_family_totals: Counter = Counter()
     run_error = None
+    first_turn = game.turn
 
     mf = open(metrics_path, "w")
     try:
@@ -99,112 +207,67 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
                 break
 
             shaped = shape(game)
-            state_text = render(shaped)
             actors_offered = sum(len(a) for a in shaped.actionable.values())
             actions_offered = shaped.num_legal_actions()
 
-            choice = contestant.choose(state_text)
+            if mode == "constrained":
+                menu = build_choice_menu(game)
+                state_text = render_menu(menu)
+                choice = contestant.choose_constrained(state_text)
+                ap = apply_constrained(game, menu, choice)
+            else:
+                state_text = render(shaped)
+                choice = contestant.choose(state_text)
+                ap = apply_freeform(game, choice)
 
-            acted: set[tuple[str, str]] = set()
-            applied = illegal = duplicate = malformed = 0
-            per_move: list[dict] = []
-            fam = Counter()
-
-            for m in (choice.moves or []):
-                if not isinstance(m, dict):
-                    malformed += 1
-                    per_move.append({"move": m, "outcome": "malformed"})
-                    continue
-                ct = m.get("ctrl_type")
-                aid = m.get("actor_id")
-                act = m.get("action")
-                if not ct or aid is None or not act:
-                    malformed += 1
-                    per_move.append({"move": m, "outcome": "malformed"})
-                    continue
-                aid = str(aid)
-                key = (ct, aid)
-                if key in acted:
-                    duplicate += 1
-                    per_move.append({"move": m, "outcome": "duplicate_actor"})
-                    continue
-                nact = normalize_action(game, ct, aid, str(act))
-                if game.is_legal(ct, aid, nact):
-                    try:
-                        game.take_action(ct, aid, nact)
-                    except Exception as e:  # an env step blew up
-                        per_move.append({"move": m, "outcome": "env_error", "error": repr(e)})
-                        run_error = f"env error on take_action {key} {nact}: {e!r}"
-                        break
-                    applied += 1
-                    acted.add(key)
-                    fam[action_family(nact)] += 1
-                    per_move.append({"move": m, "resolved": nact, "outcome": "applied"})
-                    if game.done:
-                        break
-                else:
-                    illegal += 1
-                    per_move.append({"move": m, "resolved": nact, "outcome": "illegal",
-                                     "valid_sample": game.legal_actions_for(ct, aid)[:8]})
-
-            # End the turn (advance) unless the game already ended mid-application.
+            run_error = ap["run_error"]
             if not game.done and run_error is None:
                 try:
                     game.end_turn()
                 except Exception as e:
                     run_error = f"env error on end_turn (turn {turn}): {e!r}"
 
-            decisions = applied + illegal + malformed
-            illegal_rate = (illegal + malformed) / decisions if decisions else 0.0
+            decisions = ap["applied"] + ap["illegal"] + ap["malformed"]
+            illegal_rate = (ap["illegal"] + ap["malformed"]) / decisions if decisions else 0.0
+            selection_errors = ap["bad_index"] + ap["unknown_actor"]
             row = {
-                "turn": turn,
+                "turn": turn, "mode": mode,
                 "score": shaped.summary.get("score"),
                 "num_units": shaped.summary.get("num_units"),
                 "num_cities": shaped.summary.get("num_cities"),
-                "actors_offered": actors_offered,
-                "actions_offered": actions_offered,
-                "attempted": len(choice.moves or []),
-                "applied": applied,
-                "illegal": illegal,
-                "malformed": malformed,
-                "duplicate": duplicate,
-                "illegal_rate": round(illegal_rate, 3),
-                "applied_families": dict(fam),
-                "plan": choice.plan,
-                "subagent_error": choice.error,
-                "subagent_ms": choice.duration_ms,
-                "subagent_cost_usd": choice.cost_usd,
-                "reward": game.reward,
-                "terminated": game.terminated,
-                "truncated": game.truncated,
+                "actors_offered": actors_offered, "actions_offered": actions_offered,
+                "attempted": ap["attempted"], "applied": ap["applied"],
+                "illegal": ap["illegal"], "malformed": ap["malformed"], "duplicate": ap["duplicate"],
+                "skipped": ap["skipped"], "stale": ap.get("stale", 0),
+                "bad_index": ap["bad_index"], "unknown_actor": ap["unknown_actor"],
+                "illegal_rate": round(illegal_rate, 3), "selection_errors": selection_errors,
+                "applied_families": dict(ap["families"]),
+                "plan": choice.plan, "subagent_error": choice.error,
+                "subagent_ms": choice.duration_ms, "subagent_cost_usd": choice.cost_usd,
+                "reward": game.reward, "terminated": game.terminated, "truncated": game.truncated,
             }
             metrics.append(row)
             mf.write(json.dumps(row) + "\n")
             mf.flush()
 
-            totals["attempted"] += row["attempted"]
-            totals["applied"] += applied
-            totals["illegal"] += illegal
-            totals["malformed"] += malformed
-            totals["duplicate"] += duplicate
-            applied_family_totals.update(fam)
+            for k in ("attempted", "applied", "illegal", "malformed", "duplicate",
+                      "skipped", "stale", "bad_index", "unknown_actor"):
+                totals[k] += ap.get(k, 0)
+            applied_family_totals.update(ap["families"])
 
             transcript.append({
-                "turn": turn,
-                "state_text": state_text,
-                "subagent": {"plan": choice.plan, "error": choice.error,
-                             "raw": choice.raw, "ms": choice.duration_ms, "cost_usd": choice.cost_usd},
-                "parsed_moves": choice.moves,
-                "per_move": per_move,
-                # raw->shaped debuggable: keep the full raw snapshot for the first turn only (bounded transcript)
-                "raw_snapshot": raw_snapshot(game) if turn == metrics[0]["turn"] else None,
+                "turn": turn, "mode": mode, "state_text": state_text,
+                "subagent": {"plan": choice.plan, "error": choice.error, "raw": choice.raw,
+                             "ms": choice.duration_ms, "cost_usd": choice.cost_usd},
+                "parsed": ap["parsed"], "per_move": ap["per_move"],
+                "raw_snapshot": raw_snapshot(game) if turn == first_turn else None,
             })
 
             _log(f"[turn {turn}] score={row['score']} units={row['num_units']} cities={row['num_cities']} "
-                 f"| offered_actors={actors_offered} attempted={row['attempted']} applied={applied} "
-                 f"illegal={illegal} malformed={malformed} dup={duplicate} "
-                 f"| families={dict(fam)} | plan={choice.plan[:60]!r}"
-                 + (f" | ERR={choice.error}" if choice.error else ""))
+                 f"| offered={actors_offered}a/{actions_offered}act attempted={ap['attempted']} "
+                 f"applied={ap['applied']} illegal={ap['illegal']} stale={ap.get('stale', 0)} "
+                 f"skip={ap['skipped']} badidx={ap['bad_index']} unkactor={ap['unknown_actor']} "
+                 f"| {dict(ap['families'])}" + (f" | ERR={choice.error}" if choice.error else ""))
 
             if run_error:
                 _log(f"[loop] stopping early: {run_error}")
@@ -215,33 +278,37 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
     decisions_total = totals["applied"] + totals["illegal"] + totals["malformed"]
     illegal_rate_overall = (totals["illegal"] + totals["malformed"]) / decisions_total if decisions_total else 0.0
     last = metrics[-1] if metrics else {}
-    results = game.game_results()
+    final_result = get_final_result(game)
 
     summary = {
-        "model": model,
-        "turns_played": len(metrics),
-        "max_turns": max_turns,
+        "model": model, "mode": mode,
+        "turns_played": len(metrics), "max_turns": max_turns,
         "completed_without_crash": run_error is None,
         "run_error": run_error,
         "final_turn": last.get("turn"),
         "final_score": last.get("score"),
         "final_units": last.get("num_units"),
         "final_cities": last.get("num_cities"),
-        "terminated": game.terminated,
-        "truncated": game.truncated,
-        "game_results": results,
+        "terminated": game.terminated, "truncated": game.truncated,
+        "game_results": game.game_results(),
         "totals": dict(totals),
         "decisions_total": decisions_total,
         "illegal_action_rate": round(illegal_rate_overall, 3),
+        "selection_error_total": totals["bad_index"] + totals["unknown_actor"],
         "applied_action_families": dict(applied_family_totals),
         "demonstrably_playing": {
             "founded_cities": applied_family_totals.get("found_city", 0),
             "unit_moves": applied_family_totals.get("move", 0),
-            "research_actions": applied_family_totals.get("research_tech", 0)
-                               + applied_family_totals.get("set_tech_goal", 0),
+            "research_actions": (applied_family_totals.get("research_tech", 0)
+                                 + applied_family_totals.get("set_tech_goal", 0)),
             "city_production_actions": applied_family_totals.get("city_production", 0),
             "terrain_improvements": applied_family_totals.get("terrain_improve", 0),
         },
+        # Part B: score-based win rule. final_result is read at the cap and logged here; the pure
+        # decide_winner(final_result_A, final_result_B) is exercised by playloop/test_winrule.py.
+        "win_rule": {"primary": primary_metric, "tiebreak": list(DEFAULT_TIEBREAK),
+                     "note": "higher primary at cap wins; ties broken in tiebreak order"},
+        "final_result": final_result,
         "total_cost_usd": round(sum(r["subagent_cost_usd"] or 0 for r in metrics), 4),
     }
 
@@ -257,9 +324,7 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
 
     _log("\n===== RUN SUMMARY =====")
     _log(json.dumps(summary, indent=2, default=str))
-    _log(f"\nmetrics:    {metrics_path}")
-    _log(f"transcript: {transcript_path}")
-    _log(f"summary:    {summary_path}")
+    _log(f"\nmetrics: {metrics_path}\ntranscript: {transcript_path}\nsummary: {summary_path}")
     return summary
 
 
@@ -269,15 +334,16 @@ def main() -> int:
     ap.add_argument("--client-port", type=int, default=6001)
     ap.add_argument("--username", type=str, default="myagent")
     ap.add_argument("--model", type=str, default="claude-opus-4-8")
+    ap.add_argument("--mode", choices=["constrained", "freeform"], default="constrained")
+    ap.add_argument("--primary-metric", type=str, default=DEFAULT_PRIMARY)
     ap.add_argument("--out-dir", type=str, default=None)
     args = ap.parse_args()
 
     out_dir = args.out_dir or os.path.join(
-        os.path.dirname(__file__), "runs",
-        _dt.datetime.now().strftime("%Y%m%d-%H%M%S"),
-    )
+        os.path.dirname(__file__), "runs", _dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
     try:
-        summary = play(args.max_turns, args.client_port, args.username, args.model, out_dir)
+        summary = play(args.max_turns, args.client_port, args.username, args.model, out_dir,
+                       mode=args.mode, primary_metric=args.primary_metric)
     except Exception:
         _log("[loop] FATAL:\n" + traceback.format_exc())
         return 1
