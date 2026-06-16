@@ -36,8 +36,9 @@ class MockContestant:
     def name(self):
         return "mock"
 
-    def choose_constrained(self, text):
+    def choose_constrained(self, text, schema=None):
         self.prompts.append(text)
+        self.last_schema = schema
         r = self.responses[min(self.calls, len(self.responses) - 1)]
         self.calls += 1
         return ChoiceResult(choices=dict(r), cost_usd=0.0, duration_ms=1)
