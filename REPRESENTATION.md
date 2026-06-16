@@ -99,6 +99,20 @@ The action strings never come from the model, so it cannot propose anything ille
 not legitimate "illegal play" — those are tracked separately (`selection_errors`) and should be
 driven to ~0.
 
+### Structured-output enforcement + retry feedback
+
+Two layers harden the contestant's reply beyond "valid JSON":
+
+1. **Per-turn JSON Schema** (`menu_to_schema`): one integer property per actor, each constrained to
+   an `enum` of that actor's valid option numbers, all actors `required`, `additionalProperties:false`.
+   Passed to a grammar-constrained backend (Ollama `format=<schema>`), this makes it *impossible* to
+   hallucinate an actor, pick an out-of-range number, or omit an actor. Measured effect on a weak 1B
+   (`llama3.2:1b`): actors-acted-on/turn 1→7, hallucinated actors 50→0, retries 100→0 (illegal stays
+   0). It does **not** fix *judgment* — a 1B still makes legal-but-poor choices.
+2. **Retry feedback** (`invalid_selections`/`build_feedback`/`resolve_choices`): for contestants that
+   ignore the schema (e.g. the `claude` CLI path), an invalid selection is returned to the model with
+   the acceptable options enumerated, and retried (merging only the corrected actors).
+
 ## Raw → shaped is debuggable
 
 `raw_snapshot(game)` returns the JSON-able raw `obs` (with the bulky `map` arrays elided) and

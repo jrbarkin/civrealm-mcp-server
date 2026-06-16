@@ -295,3 +295,29 @@ Ran the local game (zero API usage) after installing Ollama and pulling `llama3.
   constrained smoke (Sonnet) founded a city by turn 2 like the free-form runs, suggesting no
   regression, but the 50-turn capable-model constrained run is still open — cheapest via a larger
   local model now that Ollama works.
+
+## Structured-output enforcement ("what are we doing wrong")
+We were only using Ollama `format:"json"` (syntactic JSON), **not a schema** — so the 1B could emit
+valid JSON with a *hallucinated* actor key and an arbitrary number. Fix: build a per-turn JSON
+Schema (`representation.menu_to_schema`) — one integer property per actor, each an `enum` of that
+actor's valid option numbers, **all actors `required`**, `additionalProperties:false` — and pass it
+as Ollama's `format` (grammar-constrained decoding). Invalid output can no longer be emitted.
+Threaded through `resolve_choices`; `OllamaContestant` enforces it, `ClaudeSubagentContestant`
+accepts-but-ignores (the CLI can't pass it; Claude follows the menu text fine).
+
+Effect (`llama3.2:1b`, local, free; per-turn averages):
+
+| metric | `format:"json"` (50t) | **schema (15t)** |
+|---|---|---|
+| actors acted on / turn | 1.0 | **7.0 (all)** |
+| `unknown_actor` (hallucinated) | 50 | **0** |
+| retries needed | 100 | **0** |
+| illegal | 0 | 0 |
+
+Structural problems (coverage, hallucination, retries) — **fully fixed**. But the 1B still founded
+**0 cities / score 0** over 15 turns: it now makes legal, complete choices but poor ones (moves,
+improves terrain, sets research/gov; never picks `build_city` for its Settlers). Direct probe:
+told "pick option 4 (build_city)" it returned a schema-valid **0 (skip)**. ⇒ residual gap is **1B
+judgment, not format**. Use a 7–8B local model or `--backend claude` for competent play. Runs:
+`playloop/runs/local-llama1b-50turn` (no schema) vs `playloop/runs/local-llama1b-schema` (schema).
+Verified by `playloop/test_retry.py` (schema shape) + a direct Ollama schema probe.

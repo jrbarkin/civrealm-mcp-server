@@ -10,7 +10,7 @@ Run: .venv/bin/python -m playloop.test_retry
 
 from playloop.contestant import ChoiceResult
 from playloop.loop import build_feedback, invalid_selections, resolve_choices
-from playloop.representation import ChoiceMenu
+from playloop.representation import ChoiceMenu, menu_to_schema
 
 
 def _menu() -> ChoiceMenu:
@@ -79,6 +79,13 @@ def main() -> int:
     m2 = MockContestant([{"unit:101": 1, "city:110": 0}])
     choices2, meta2 = resolve_choices(m2, menu, "MENU", max_retries=2)
     _check("no retry when all valid", meta2["retries"] == 0 and not invalid_selections(menu, choices2))
+
+    # Structured-output schema: pins actor keys + enum of valid option numbers, all required.
+    sch = menu_to_schema(menu)["properties"]["choices"]
+    _check("schema: no extra keys", sch["additionalProperties"] is False)
+    _check("schema: all actors required", set(sch["required"]) == {"unit:101", "city:110"})
+    _check("schema: unit:101 enum = valid options", sch["properties"]["unit:101"]["enum"] == [0, 1, 2])
+    _check("schema: city:110 enum = valid options", sch["properties"]["city:110"]["enum"] == [0, 1])
 
     print("ALL RETRY TESTS PASSED")
     return 0

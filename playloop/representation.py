@@ -215,6 +215,33 @@ def render(s: ShapedState) -> str:
     return "\n".join(lines)
 
 
+def menu_to_schema(menu: ChoiceMenu) -> dict:
+    """Per-turn JSON Schema for STRUCTURED-OUTPUT enforcement (Ollama `format=<schema>` /
+    grammar-constrained decoding). One integer property per actor, each constrained to an `enum`
+    of that actor's valid option numbers (0=skip included); ALL actors required and no extra keys.
+
+    With this, a constrained decoder structurally CANNOT: invent an actor that isn't on the board
+    (additionalProperties:false + fixed `required` keys), pick an out-of-range option (enum), or
+    omit an actor (required). It turns "validate + retry" into "can't be emitted in the first place".
+    """
+    props = {actor_key: {"type": "integer", "enum": sorted(opts.keys())}
+             for actor_key, opts in menu.index.items()}
+    return {
+        "type": "object",
+        "properties": {
+            "plan": {"type": "string"},
+            "choices": {
+                "type": "object",
+                "properties": props,
+                "required": list(props.keys()),
+                "additionalProperties": False,
+            },
+        },
+        "required": ["choices"],
+        "additionalProperties": False,
+    }
+
+
 def raw_snapshot(game) -> dict:
     """JSON-able raw obs (minus the bulky 'map' arrays) + info, for raw->shaped debugging."""
     obs = game.obs if isinstance(game.obs, dict) else {}

@@ -1,0 +1,68 @@
+{
+  "model": "llama3.2:1b",
+  "backend": "local",
+  "contestant": "ollama:llama3.2:1b",
+  "mode": "constrained",
+  "turns_played": 15,
+  "max_turns": 15,
+  "completed_without_crash": true,
+  "run_error": null,
+  "final_turn": 15,
+  "final_score": 0,
+  "final_units": 5,
+  "final_cities": 0,
+  "terminated": false,
+  "truncated": true,
+  "game_results": {},
+  "totals": {
+    "attempted": 105,
+    "applied": 105,
+    "illegal": 0,
+    "malformed": 0,
+    "duplicate": 0,
+    "skipped": 15,
+    "stale": 0,
+    "bad_index": 0,
+    "unknown_actor": 0,
+    "retries": 0
+  },
+  "decisions_total": 105,
+  "illegal_action_rate": 0.0,
+  "selection_error_total": 0,
+  "applied_action_families": {
+    "terrain_improve": 22,
+    "unit_hold": 29,
+    "move": 18,
+    "set_tech_goal": 15,
+    "change_gov": 1,
+    "gov_rates": 14,
+    "cancel": 6
+  },
+  "demonstrably_playing": {
+    "founded_cities": 0,
+    "unit_moves": 18,
+    "research_actions": 15,
+    "city_production_actions": 0,
+    "terrain_improvements": 22
+  },
+  "win_rule": {
+    "primary": "score",
+    "tiebreak": [
+      "cities",
+      "techs",
+      "population",
+      "units"
+    ],
+    "note": "higher primary at cap wins; ties broken in tiebreak order"
+  },
+  "final_result": {
+    "player_id": 0,
+    "score": 0,
+    "techs": 1,
+    "cities": 0,
+    "population": 0,
+    "units": 5,
+    "turn": 16
+  },
+  "total_cost_usd": 0
+}

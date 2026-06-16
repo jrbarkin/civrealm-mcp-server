@@ -32,7 +32,8 @@ from collections import Counter
 
 from civrealm_mcp.core import COMPASS_TO_GOTO, CivRealmGame
 from playloop.contestant import ClaudeSubagentContestant, OllamaContestant
-from playloop.representation import build_choice_menu, raw_snapshot, render, render_menu, shape
+from playloop.representation import (build_choice_menu, menu_to_schema, raw_snapshot, render,
+                                     render_menu, shape)
 from playloop.winrule import DEFAULT_PRIMARY, DEFAULT_TIEBREAK, get_final_result
 
 
@@ -109,11 +110,16 @@ def build_feedback(menu_text: str, bad: dict, valid_actors: list[str]) -> str:
     return "\n".join(lines)
 
 
-def resolve_choices(contestant, menu, menu_text: str, max_retries: int = 2) -> tuple[dict, dict]:
+def resolve_choices(contestant, menu, menu_text: str, max_retries: int = 2,
+                    schema=None) -> tuple[dict, dict]:
     """Ask the contestant for option-number choices; if any are invalid, send feedback that
     enumerates the valid options and retry (merging only the corrected actors). Returns
-    (choices, meta) where meta carries plan/error/ms/cost and the retry count."""
-    res = contestant.choose_constrained(menu_text)
+    (choices, meta) where meta carries plan/error/ms/cost and the retry count.
+
+    `schema` (per-turn JSON Schema from menu_to_schema) is passed to the contestant for
+    structured-output enforcement; with it, retries should be rare (invalid output can't be
+    emitted), but the retry path remains as a backstop for contestants that ignore the schema."""
+    res = contestant.choose_constrained(menu_text, schema=schema)
     choices = dict(res.choices or {})
     meta = {"plan": res.plan, "error": res.error, "ms": res.duration_ms or 0,
             "cost": res.cost_usd or 0, "retries": 0}
@@ -123,7 +129,7 @@ def resolve_choices(contestant, menu, menu_text: str, max_retries: int = 2) -> t
         if not bad:
             break
         meta["retries"] += 1
-        r = contestant.choose_constrained(build_feedback(menu_text, bad, valid_actors))
+        r = contestant.choose_constrained(build_feedback(menu_text, bad, valid_actors), schema=schema)
         meta["ms"] += r.duration_ms or 0
         meta["cost"] += r.cost_usd or 0
         if r.error:
@@ -276,7 +282,8 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
             if mode == "constrained":
                 menu = build_choice_menu(game)
                 state_text = render_menu(menu)
-                choices, meta = resolve_choices(contestant, menu, state_text)
+                schema = menu_to_schema(menu)  # structured-output enforcement (enum per actor)
+                choices, meta = resolve_choices(contestant, menu, state_text, schema=schema)
                 ap = apply_constrained(game, menu, choices)
             else:
                 state_text = render(shaped)

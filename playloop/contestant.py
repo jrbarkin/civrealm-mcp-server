@@ -143,7 +143,7 @@ class OllamaContestant:
     def name(self) -> str:
         return f"ollama:{self.model}"
 
-    def _chat(self, system_prompt: str, user_prompt: str):
+    def _chat(self, system_prompt: str, user_prompt: str, fmt=None):
         import time
 
         import requests
@@ -152,7 +152,9 @@ class OllamaContestant:
             "messages": [{"role": "system", "content": system_prompt},
                          {"role": "user", "content": user_prompt}],
             "stream": False,
-            "format": "json",
+            # fmt may be "json" (syntactic) or a full JSON Schema dict (structured-output /
+            # grammar-constrained decoding — see representation.menu_to_schema).
+            "format": fmt or "json",
             "options": {"temperature": 0, "num_predict": self.max_tokens},
         }
         t = time.time()
@@ -173,9 +175,9 @@ class OllamaContestant:
         return ChoiceResult(moves=_norm_moves(parsed), plan=str(parsed.get("plan", "")),
                             raw=out[:1000], duration_ms=ms, cost_usd=0.0)
 
-    def choose_constrained(self, menu_text: str) -> ChoiceResult:
+    def choose_constrained(self, menu_text: str, schema=None) -> ChoiceResult:
         try:
-            out, ms = self._chat(CONSTRAINED_SYSTEM_PROMPT, menu_text)
+            out, ms = self._chat(CONSTRAINED_SYSTEM_PROMPT, menu_text, fmt=schema)
         except Exception as e:
             return ChoiceResult(choices={}, error=f"ollama failed: {e!r}", cost_usd=0.0)
         parsed = _extract_json_object(out)
@@ -232,8 +234,10 @@ class ClaudeSubagentContestant:
         return ChoiceResult(moves=moves, plan=str(parsed.get("plan", "")), raw=raw,
                             duration_ms=ms, cost_usd=cost)
 
-    def choose_constrained(self, menu_text: str) -> ChoiceResult:
-        """Constrained mode: returns choices {actor_key: option_int} over a per-actor menu."""
+    def choose_constrained(self, menu_text: str, schema=None) -> ChoiceResult:
+        """Constrained mode: returns choices {actor_key: option_int} over a per-actor menu.
+        `schema` is accepted for interface parity but not enforced here (the `claude` CLI path
+        doesn't pass output_config; the menu text already enumerates the valid options)."""
         parsed, error, raw, ms, cost = self._invoke(menu_text, CONSTRAINED_SYSTEM_PROMPT)
         if parsed is None:
             return ChoiceResult(choices={}, error=error, raw=raw, duration_ms=ms, cost_usd=cost)
