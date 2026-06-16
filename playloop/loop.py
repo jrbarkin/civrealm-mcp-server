@@ -247,7 +247,7 @@ def apply_constrained(game: CivRealmGame, menu, choices: dict) -> dict:
 
 def play(max_turns: int, client_port: int, username: str, model: str, out_dir: str,
          mode: str = "constrained", primary_metric: str = DEFAULT_PRIMARY,
-         backend: str = "claude") -> dict:
+         backend: str = "claude", seed: int | None = None) -> dict:
     os.makedirs(out_dir, exist_ok=True)
     metrics_path = os.path.join(out_dir, "metrics.jsonl")
     transcript_path = os.path.join(out_dir, "transcript.json")
@@ -258,8 +258,8 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
     game = CivRealmGame()
     _log(f"[loop] start: backend={backend} contestant={contestant.name()} "
          f"port={client_port} max_turns={max_turns} mode={mode}")
-    game.start(client_port=client_port, max_turns=max_turns, username=username)
-    _log(f"[loop] reset done. my_player_id={game.my_player_id()} turn={game.turn}")
+    game.start(client_port=client_port, max_turns=max_turns, username=username, seed=seed)
+    _log(f"[loop] reset done. my_player_id={game.my_player_id()} turn={game.turn} seed={seed}")
 
     metrics: list[dict] = []
     transcript: list[dict] = []
@@ -305,6 +305,7 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
             row = {
                 "turn": turn, "mode": mode,
                 "score": shaped.summary.get("score"),
+                "techs": shaped.summary.get("techs_researched"),
                 "num_units": shaped.summary.get("num_units"),
                 "num_cities": shaped.summary.get("num_cities"),
                 "actors_offered": actors_offered, "actions_offered": actions_offered,
@@ -413,6 +414,7 @@ def main() -> int:
                     help="default: claude-opus-4-8 (claude) or mlx Llama-3.2-1B-Instruct-4bit (local)")
     ap.add_argument("--mode", choices=["constrained", "freeform"], default="constrained")
     ap.add_argument("--primary-metric", type=str, default=DEFAULT_PRIMARY)
+    ap.add_argument("--seed", type=int, default=None, help="fix map/game/agent seeds for reproducibility")
     ap.add_argument("--out-dir", type=str, default=None)
     args = ap.parse_args()
 
@@ -421,7 +423,8 @@ def main() -> int:
         os.path.dirname(__file__), "runs", _dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
     try:
         summary = play(args.max_turns, args.client_port, args.username, model, out_dir,
-                       mode=args.mode, primary_metric=args.primary_metric, backend=args.backend)
+                       mode=args.mode, primary_metric=args.primary_metric, backend=args.backend,
+                       seed=args.seed)
     except Exception:
         _log("[loop] FATAL:\n" + traceback.format_exc())
         return 1
