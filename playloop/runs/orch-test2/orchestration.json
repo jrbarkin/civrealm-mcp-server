@@ -1,0 +1,55 @@
+{
+  "cap": 4,
+  "seed": 42,
+  "client_port": 6001,
+  "side_a": {
+    "spec": "random:1",
+    "player_id": 0,
+    "contestant": "random:1",
+    "turns_acted": 4,
+    "final_turn": 5,
+    "final_result": {
+      "player_id": 0,
+      "score": 0,
+      "techs": 1,
+      "cities": 0,
+      "population": 0,
+      "units": 5,
+      "turn": 5
+    },
+    "terminated": false,
+    "truncated": true
+  },
+  "side_b": {
+    "spec": "random:2",
+    "player_id": 1,
+    "contestant": "random:2",
+    "turns_acted": 4,
+    "final_turn": 5,
+    "final_result": {
+      "player_id": 1,
+      "score": 0,
+      "techs": 0,
+      "cities": 0,
+      "population": 0,
+      "units": 0,
+      "turn": 5
+    },
+    "terminated": true,
+    "truncated": true
+  },
+  "verdict": {
+    "winner": "A",
+    "by": "techs",
+    "scores": {
+      "A": 0,
+      "B": 0
+    },
+    "reason": "techs: A=1 vs B=0"
+  },
+  "winner_side": "A",
+  "winner_label": "random:1",
+  "hung_sides": [],
+  "errors": {},
+  "completed": true
+}

@@ -1,0 +1,13 @@
+[orch] cap=4 seed=42 port=6001 | A=random:1(random:1) B=random:2(random:2)
+[A] joined as player_id=0 (username=agentA) at turn 1
+[A] player0 TURN 1: applied=8 illegal=0 stale=0 families={'terrain_improve': 1, 'move': 3, 'unit_hold': 1, 'set_tech_goal': 1, 'gov_rates': 1, 'chat': 1}
+[B] joined as player_id=1 (username=agentB) at turn 1
+[B] player1 TURN 1: applied=7 illegal=0 stale=0 families={'terrain_improve': 2, 'move': 1, 'unit_hold': 1, 'set_tech_goal': 1, 'gov_rates': 1, 'chat': 1}
+[A] player0 TURN 2: applied=7 illegal=0 stale=0 families={'move': 5, 'set_tech_goal': 1, 'gov_rates': 1}
+[B] player1 TURN 2: applied=7 illegal=0 stale=0 families={'move': 3, 'found_city': 1, 'set_tech_goal': 1, 'gov_rates': 1, 'chat': 1}
+[A] player0 TURN 3: applied=6 illegal=0 stale=0 families={'move': 4, 'set_tech_goal': 1, 'chat': 1}
+[B] player1 TURN 3: applied=8 illegal=0 stale=0 families={'move': 4, 'city_production': 1, 'set_tech_goal': 1, 'gov_rates': 1, 'chat': 1}
+[A] player0 TURN 4: applied=7 illegal=0 stale=0 families={'terrain_improve': 2, 'move': 2, 'unit_hold': 1, 'set_tech_goal': 1, 'gov_rates': 1}
+[B] player1 TURN 4: applied=6 illegal=0 stale=0 families={'move': 3, 'city_production': 1, 'set_tech_goal': 1, 'gov_rates': 1}
+[A] FINISHED at turn 5: {'player_id': 0, 'score': 0, 'techs': 1, 'cities': 0, 'population': 0, 'units': 5, 'turn': 5}
+[B] FINISHED at turn 5: {'player_id': 1, 'score': 0, 'techs': 0, 'cities': 0, 'population': 0, 'units': 0, 'turn': 5}

@@ -86,22 +86,32 @@ class CivRealmGame:
 
     # --- lifecycle ---------------------------------------------------------
     def start(self, client_port: int = 6001, max_turns: int = 1000,
-              username: str = "myagent", begin_turn_timeout: int = 120):
-        """Create/reset a single-player game vs the built-in AIs. Returns (obs, info)."""
+              username: str = "myagent", begin_turn_timeout: int = 120,
+              minp: int = 1, seed: int | None = None):
+        """Create/reset a game and return (obs, info).
+
+        minp=1 -> single-player vs built-in AIs (starts immediately). minp>=2 -> wait for that many
+        human players on the same client_port (two-agent orchestration). seed (if given) fixes the
+        map/game/agent seeds for reproducible games. The per-client identity is the constructor
+        `username` (login); fc_args is set for shared game settings (idempotent across clients)."""
         from civrealm.configs import fc_args
         from civrealm.envs.freeciv_base_env import FreecivBaseEnv
 
         if self.env is not None:
             self.close()
 
-        # Keep CivRealm's default multiplayer_game/aifill (the config test_civrealm uses for
-        # "single player vs built-in AIs"); minp=1 starts immediately.
         fc_args["username"] = username
         fc_args["max_turns"] = max_turns
-        fc_args["minp"] = 1
+        fc_args["minp"] = minp
         fc_args["begin_turn_timeout"] = max(fc_args.get("begin_turn_timeout", 30), begin_turn_timeout)
+        if seed is not None:
+            fc_args["debug.randomly_generate_seeds"] = False
+            fc_args["debug.mapseed"] = seed
+            fc_args["debug.gameseed"] = seed
+            fc_args["debug.agentseed"] = seed
 
-        log.info("start: FreecivBaseEnv(username=%s) port=%s max_turns=%s", username, client_port, max_turns)
+        log.info("start: FreecivBaseEnv(username=%s) port=%s max_turns=%s minp=%s seed=%s",
+                 username, client_port, max_turns, minp, seed)
         self.env = FreecivBaseEnv(username=username)
         obs, info = self.env.reset(client_port=client_port)
         self.obs, self.info = obs, info

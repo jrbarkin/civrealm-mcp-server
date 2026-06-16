@@ -321,3 +321,45 @@ told "pick option 4 (build_city)" it returned a schema-valid **0 (skip)**. ⇒ r
 judgment, not format**. Use a 7–8B local model or `--backend claude` for competent play. Runs:
 `playloop/runs/local-llama1b-50turn` (no schema) vs `playloop/runs/local-llama1b-schema` (schema).
 Verified by `playloop/test_retry.py` (schema shape) + a direct Ollama schema probe.
+
+---
+
+# Update (2026-06-15c): Two-agent orchestration — verified end-to-end
+
+The prime objective: two contestants, ONE shared game, a decided winner. `playloop/orchestrate.py`.
+
+## Design — the hard part: turn handoff without deadlock
+Env calls block (tornado IOLoop), and in a 2-player game they block on *each other*
+(`gameB.reset()` waits for A's first phase; `A.end_turn()` waits for B's phase). A single shared
+worker thread deadlocks, so:
+- **one thread per side** — both `reset()`s block concurrently until the game starts, and one
+  side's blocking `end_turn` doesn't stall the other;
+- **freeciv's sequential phases serialize the active side** (B's thread stays blocked until B's
+  phase), plus a `query_lock` guarantees only ONE contestant is queried at a time;
+- **anti-hang:** `begin_turn_timeout` (120s) makes a stuck `end_turn` return truncated instead of
+  hanging; the orchestrator also `join`s with a timeout and reports a hang;
+- side A starts first (+delay) so A=player 0, B=player 1 **deterministically**.
+
+## Test fixture
+`RandomContestant` (`contestant.py`): uniform-random over each actor's legal option numbers (read
+from the per-turn schema enums), seeded, **model-free** — so any wrong result is unambiguously the
+orchestrator's fault.
+
+## Verified (RandomContestant vs RandomContestant; `playloop/runs/orch-test1`, `orch-test2`)
+- **Full 4-turn 2-player game, no hang (~19 s).** Strict alternation A↔B every turn (`turnlog.txt`),
+  both players acting 6–8 actions/turn, **illegal 0 / stale 0 all game** (schema-constrained).
+- **Winner path runs end-to-end (first time ever):** both scores read at the cap; score 0–0 →
+  tiebreak on **techs** → winner **A (`random:1`)**, mapped to the correct side. (B's player was
+  eliminated — units 0, terminated — consistent with the tiebreak.)
+- **Tie/tiebreak resolves without crashing** — the real game hit the 0–0-score → techs path; the
+  full-tie → `"tie"` path is unit-tested.
+- **Determinism:** same seed twice → **identical verdict + identical per-player final
+  score/techs/cities/population/units + identical winner label**. The only difference is the losing
+  side's final *turn* counter (6 vs 5), a thread-handoff timing artifact not used by `decide_winner`.
+
+## Tests (free, no env/model): `test_winrule` 8/8 · `test_retry` 17/17 · `test_orchestrate` 6/6.
+
+## Out of scope (not done, per task)
+Competent-play / Claude / 7–8B demos, brackets, Elo/rating, multi-game fairness, lifecycle polish.
+`qwen3:4b` and `gemma4:e4b` are pulled and ready (Ollama) for that next phase. Reproduce:
+`.venv/bin/python -m playloop.orchestrate --cap 6 --seed 42 --side-a random:1 --side-b random:2`.

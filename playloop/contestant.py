@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import subprocess
 from dataclasses import dataclass
 
@@ -255,3 +256,30 @@ class ClaudeSubagentContestant:
                         norm[str(actor)] = opt
         return ChoiceResult(choices=norm, plan=str(parsed.get("plan", "")), raw=raw,
                             duration_ms=ms, cost_usd=cost)
+
+
+class RandomContestant:
+    """Deterministic, model-free test fixture for orchestration testing.
+
+    Picks a uniformly-random valid option number for each actor, read from the per-turn JSON
+    Schema's enums (representation.menu_to_schema). No env access, no LLM — so any wrong
+    orchestration result is unambiguously the orchestrator's fault, not a model's. Seeded for
+    reproducibility (same seed -> same choices given the same menus)."""
+
+    def __init__(self, seed: int = 0):
+        self.seed = seed
+        self.rng = random.Random(seed)
+
+    def name(self) -> str:
+        return f"random:{self.seed}"
+
+    def choose_constrained(self, menu_text: str, schema=None) -> ChoiceResult:
+        choices: dict[str, int] = {}
+        props = ((schema or {}).get("properties", {}).get("choices", {}).get("properties", {}))
+        for actor_key, spec in props.items():
+            enum = spec.get("enum") or [0]
+            choices[actor_key] = self.rng.choice(enum)
+        return ChoiceResult(choices=choices, plan="random", cost_usd=0.0, duration_ms=0)
+
+    def choose(self, state_text: str) -> ChoiceResult:  # free-form path unused by the orchestrator
+        return ChoiceResult(moves=[], plan="random", cost_usd=0.0, duration_ms=0)
