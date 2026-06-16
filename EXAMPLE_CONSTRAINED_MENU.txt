@@ -1,0 +1,32 @@
+=== CivRealm — turn 1 of 2 ===
+You are player 0 "Myagent". Score 0. Gold 50. Government: Despotism. Rates tax/sci/lux 40/60/0.
+Researching: None (0/28 bulbs). Techs known: 1.
+You have 0 cities and 5 units. Coordinates are (x=column, y=row); North is up (decreasing y).
+
+Choose ONE option NUMBER for each actor below (0 = skip). You may only pick numbers shown for that actor — so every choice is a legal move.
+
+unit:104  Settlers at (43,14) moves 3
+   0) skip   1) cultivate   2) plant   3) keep_activity [hold: stay put / keep doing current activity]   4) build_city   5) goto_0 [move_NorthWest]   6) goto_1 [move_North]   7) goto_2 [move_NorthEast]   8) goto_3 [move_West]   9) goto_4 [move_East]   10) goto_5 [move_SouthWest]   11) goto_6 [move_South]   12) goto_7 [move_SouthEast]
+
+unit:117  Settlers at (43,14) moves 3
+   0) skip   1) cultivate   2) plant   3) keep_activity [hold: stay put / keep doing current activity]   4) build_city   5) goto_0 [move_NorthWest]   6) goto_1 [move_North]   7) goto_2 [move_NorthEast]   8) goto_3 [move_West]   9) goto_4 [move_East]   10) goto_5 [move_SouthWest]   11) goto_6 [move_South]   12) goto_7 [move_SouthEast]
+
+unit:118  Workers at (43,14) moves 3
+   0) skip   1) cultivate   2) plant   3) keep_activity [hold: stay put / keep doing current activity]   4) goto_0 [move_NorthWest]   5) goto_1 [move_North]   6) goto_2 [move_NorthEast]   7) goto_3 [move_West]   8) goto_4 [move_East]   9) goto_5 [move_SouthWest]   10) goto_6 [move_South]   11) goto_7 [move_SouthEast]
+
+unit:119  Workers at (43,14) moves 3
+   0) skip   1) cultivate   2) plant   3) keep_activity [hold: stay put / keep doing current activity]   4) goto_0 [move_NorthWest]   5) goto_1 [move_North]   6) goto_2 [move_NorthEast]   7) goto_3 [move_West]   8) goto_4 [move_East]   9) goto_5 [move_SouthWest]   10) goto_6 [move_South]   11) goto_7 [move_SouthEast]
+
+unit:120  Explorer at (43,14) moves 3
+   0) skip   1) keep_activity [hold: stay put / keep doing current activity]   2) fortify [hold: dig in (defensive)]   3) goto_0 [move_NorthWest]   4) goto_1 [move_North]   5) goto_2 [move_NorthEast]   6) goto_3 [move_West]   7) goto_4 [move_East]   8) goto_5 [move_SouthWest]   9) goto_6 [move_South]   10) goto_7 [move_SouthEast]
+
+tech:cur_player
+   0) skip   1) set_tech_goal_Advanced Flight_1   2) research_tech_Alphabet_2   3) set_tech_goal_Amphibious Warfare_3   4) set_tech_goal_Astronomy_4   5) set_tech_goal_Atomic Theory_5   6) set_tech_goal_Automobile_6   7) set_tech_goal_Banking_7   8) set_tech_goal_Bridge Building_8   9) research_tech_Bronze Working_9   10) research_tech_Ceremonial Burial_10   11) set_tech_goal_Chemistry_11   12) set_tech_goal_Chivalry_12   13) set_tech_goal_Code of Laws_13   14) set_tech_goal_Combined Arms_14   15) set_tech_goal_Combustion_15   16) set_tech_goal_Communism_16   17) set_tech_goal_Computers_17   18) set_tech_goal_Conscription_18   19) set_tech_goal_Construction_19   20) set_tech_goal_Currency_20   21) set_tech_goal_Democracy_21   22) set_tech_goal_Economics_22   23) set_tech_goal_Electricity_23   24) set_tech_goal_Electronics_24   25) set_tech_goal_Engineering_25   26) set_tech_goal_Environmentalism_26   27) set_tech_goal_Espionage_27   28) set_tech_goal_Explosives_28   29) set_tech_goal_Feudalism_29   30) set_tech_goal_Flight_30   31) set_tech_goal_Fusion Power_31   32) set_tech_goal_Genetic Engineering_32   33) set_tech_goal_Guerilla Warfare_33   34) set_tech_goal_Gunpowder_34   35) research_tech_Horseback Riding_35   36) set_tech_goal_Industrialization_36   37) set_tech_goal_Invention_37   38) set_tech_goal_Iron Working_38   39) set_tech_goal_Labor Union_39   40) set_tech_goal_Laser_40   41) set_tech_goal_Leadership_41   42) set_tech_goal_Literacy_42   43) set_tech_goal_Machine Tools_43   44) set_tech_goal_Magnetism_44   45) set_tech_goal_Map Making_45   46) research_tech_Masonry_46   47) set_tech_goal_Mass Production_47   48) set_tech_goal_Mathematics_48   49) set_tech_goal_Medicine_49   50) set_tech_goal_Metallurgy_50   51) set_tech_goal_Miniaturization_51   52) set_tech_goal_Mobile Warfare_52   53) set_tech_goal_Monarchy_53   54) set_tech_goal_Monotheism_54   55) set_tech_goal_Mysticism_55   56) set_tech_goal_Navigation_56   57) set_tech_goal_Nuclear Fission_57   58) set_tech_goal_Nuclear Power_58   59) set_tech_goal_Philosophy_59   60) set_tech_goal_Physics_60
+
+gov:0
+   0) skip   1) change_gov_Anarchy   2) set_sci_lux_tax_0_40_60   3) set_sci_lux_tax_0_50_50   4) set_sci_lux_tax_0_60_40   5) set_sci_lux_tax_10_30_60   6) set_sci_lux_tax_10_40_50   7) set_sci_lux_tax_10_50_40   8) set_sci_lux_tax_10_60_30   9) set_sci_lux_tax_20_20_60   10) set_sci_lux_tax_20_30_50   11) set_sci_lux_tax_20_40_40   12) set_sci_lux_tax_20_50_30   13) set_sci_lux_tax_20_60_20   14) set_sci_lux_tax_30_10_60   15) set_sci_lux_tax_30_20_50   16) set_sci_lux_tax_30_30_40   17) set_sci_lux_tax_30_40_30   18) set_sci_lux_tax_30_50_20   19) set_sci_lux_tax_30_60_10   20) set_sci_lux_tax_40_0_60   21) set_sci_lux_tax_40_10_50   22) set_sci_lux_tax_40_20_40   23) set_sci_lux_tax_40_30_30   24) set_sci_lux_tax_40_40_20   25) set_sci_lux_tax_40_50_10   26) set_sci_lux_tax_40_60_0   27) set_sci_lux_tax_50_0_50   28) set_sci_lux_tax_50_10_40   29) set_sci_lux_tax_50_20_30   30) set_sci_lux_tax_50_30_20   31) set_sci_lux_tax_50_40_10   32) set_sci_lux_tax_50_50_0   33) set_sci_lux_tax_60_0_40   34) set_sci_lux_tax_60_10_30   35) set_sci_lux_tax_60_20_20   36) set_sci_lux_tax_60_30_10   37) set_sci_lux_tax_60_40_0
+
+player:message
+   0) skip   1) chat
+
+[note: some actors had more than 60 legal actions; truncated: tech:cur_player (+27 more not shown)]

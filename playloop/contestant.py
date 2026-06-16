@@ -12,6 +12,7 @@ bug is our representation/loop, not the model.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 
@@ -99,6 +100,90 @@ def _extract_json_object(text: str) -> dict | None:
                 except json.JSONDecodeError:
                     return None
     return None
+
+
+def _norm_moves(parsed: dict) -> list:
+    moves = parsed.get("moves", [])
+    return moves if isinstance(moves, list) else []
+
+
+def _norm_choices(parsed: dict) -> dict:
+    raw = parsed.get("choices", {})
+    norm: dict[str, object] = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            norm[str(k)] = v
+    elif isinstance(raw, list):  # tolerate [{"actor":..,"option":..}]
+        for item in raw:
+            if isinstance(item, dict):
+                actor = item.get("actor") or item.get("actor_key")
+                opt = item.get("option", item.get("choice", item.get("id")))
+                if actor is not None:
+                    norm[str(actor)] = opt
+    return norm
+
+
+class OllamaContestant:
+    """Runs a small LOCAL model via Ollama — zero API usage, cross-platform (macOS/Linux/Windows;
+    Ollama wraps llama.cpp, not MLX). Default: llama3.2:1b (Llama-3.2-1B-Instruct).
+
+    Uses Ollama's chat API with format="json" (forces valid JSON output — important for a 1B model).
+    Same interface as the other contestants: choose() / choose_constrained()."""
+
+    def __init__(self, model: str = "llama3.2:1b", host: str | None = None,
+                 max_tokens: int = 320, timeout: int = 180):
+        self.model = model
+        host = host or os.environ.get("OLLAMA_HOST") or "http://localhost:11434"
+        if "://" not in host:
+            host = "http://" + host
+        self.host = host.rstrip("/")
+        self.max_tokens = max_tokens
+        self.timeout = timeout
+
+    def name(self) -> str:
+        return f"ollama:{self.model}"
+
+    def _chat(self, system_prompt: str, user_prompt: str):
+        import time
+
+        import requests
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system_prompt},
+                         {"role": "user", "content": user_prompt}],
+            "stream": False,
+            "format": "json",
+            "options": {"temperature": 0, "num_predict": self.max_tokens},
+        }
+        t = time.time()
+        r = requests.post(f"{self.host}/api/chat", json=payload, timeout=self.timeout)
+        r.raise_for_status()
+        content = r.json().get("message", {}).get("content", "")
+        return content, int((time.time() - t) * 1000)
+
+    def choose(self, state_text: str) -> ChoiceResult:
+        try:
+            out, ms = self._chat(SYSTEM_PROMPT, state_text)
+        except Exception as e:
+            return ChoiceResult(moves=[], error=f"ollama failed: {e!r}", cost_usd=0.0)
+        parsed = _extract_json_object(out)
+        if parsed is None:
+            return ChoiceResult(moves=[], error="ollama: no JSON parsed", raw=out[:1000],
+                                duration_ms=ms, cost_usd=0.0)
+        return ChoiceResult(moves=_norm_moves(parsed), plan=str(parsed.get("plan", "")),
+                            raw=out[:1000], duration_ms=ms, cost_usd=0.0)
+
+    def choose_constrained(self, menu_text: str) -> ChoiceResult:
+        try:
+            out, ms = self._chat(CONSTRAINED_SYSTEM_PROMPT, menu_text)
+        except Exception as e:
+            return ChoiceResult(choices={}, error=f"ollama failed: {e!r}", cost_usd=0.0)
+        parsed = _extract_json_object(out)
+        if parsed is None:
+            return ChoiceResult(choices={}, error="ollama: no JSON parsed", raw=out[:1000],
+                                duration_ms=ms, cost_usd=0.0)
+        return ChoiceResult(choices=_norm_choices(parsed), plan=str(parsed.get("plan", "")),
+                            raw=out[:1000], duration_ms=ms, cost_usd=0.0)
 
 
 class ClaudeSubagentContestant:

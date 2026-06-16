@@ -204,3 +204,57 @@ Per the "no Opus for testing" constraint this A/B used Sonnet; the projected Opu
 
 Runs: `playloop/runs/sonnet-baseline/` and `playloop/runs/sonnet-fixed/`.
 Reproduce a cheap run: `.venv/bin/python -m playloop.loop --model claude-sonnet-4-6 --max-turns 30`.
+
+---
+
+# Update (2026-06-15): Constrained selection + win rule + retry feedback + local-LLM contestant
+
+Preconditions for a fair head-to-head (no orchestration yet).
+
+## Part A — constrained action selection (illegal action impossible by construction)
+- `representation.build_choice_menu()/render_menu()`: a per-actor NUMBERED menu of that actor's
+  legal actions (keyed `unit:104`/`city:110`/`tech:cur_player`/`gov:0`; option `0` = skip). The
+  contestant returns an option NUMBER per actor, so the action strings never come from the model.
+  Grouped per actor (not a flat 300-item list); one model call per turn.
+- `loop.py --mode constrained` (default): `apply_constrained` resolves numbers via the menu index
+  and applies only legal actions. Counters: applied / skipped / bad_index / unknown_actor /
+  duplicate / `stale` (legal at menu-build but changed by an earlier same-turn action under stacked
+  units — benign, skipped). **Illegal applied actions are 0 by construction.**
+- Verified (Sonnet 4.6 constrained smoke, `playloop/runs/constrained-smoke2/`): illegal_action_rate
+  **0.0**, selection_error_total **0**, all attempted choices applied; `final_result` read at the cap.
+  See `EXAMPLE_CONSTRAINED_MENU.txt` for a real per-actor menu. (A full 50-turn paid run was
+  deprioritized to conserve usage — use the local-LLM path below.)
+
+## Retry-feedback loop ("an illegal attempt should throw + remind the agent of the options")
+- When a selection is invalid (bad option number / unknown actor key), the loop returns an error
+  that **enumerates the acceptable options** for those actors and retries, merging only the
+  corrected actors, up to `max_retries`. `invalid_selections()` and `build_feedback()` are pure;
+  `resolve_choices()` drives it.
+- Verified by `playloop/test_retry.py` (mock contestant, **zero usage**): bad index + unknown actor
+  are fed back with valid options, the correction is merged, valid selections preserved, an
+  uncorrected one stays flagged, happy path does no retries. **12/12 pass.**
+
+## Part B — score-based win rule
+- `winrule.get_final_result(game)`: end-of-game metrics (score/cities/techs/population/units) read
+  from the observation at the cap. PURE `decide_winner(A, B)`: higher primary (score) wins; tiebreak
+  `cities → techs → population → units`; cap + primary metric configurable.
+- `playloop/test_winrule.py`: **8/8 pass** (A>B, B>A, each tiebreak level, full tie, configurable
+  primary, missing keys default 0). The loop logs `final_result` + `win_rule` at game end.
+
+## Local-LLM contestant (cross-platform, zero API usage)
+- `contestant.OllamaContestant`: a small local model via **Ollama** (llama.cpp/GGUF core →
+  macOS/Linux/Windows), default **`llama3.2:1b`** (Llama-3.2-1B-Instruct), using Ollama's
+  `format="json"`. Selected with `--backend local`. The contestant slot is pluggable:
+  `claude` subagent | local Ollama.
+- **Status: coded + import-verified; the local game has NOT been run here** — the Ollama server came
+  up (v0.30.8) but the model pull was interrupted and Ollama was then uninstalled (to be set up on
+  your side). Run it after installing Ollama (see SETUP.md):
+  `ollama pull llama3.2:1b` then `.venv/bin/python -m playloop.loop --backend local --max-turns 50`.
+  Constrained mode keeps illegal=0 regardless of model; the retry loop recovers a 1B's malformed
+  selections.
+
+## Verified vs pending
+- **Verified** (no/low usage): win-rule tests 8/8, retry tests 12/12, constrained smoke
+  illegal_rate 0.0, MCP acceptance still green after the `core.py` refactor.
+- **Pending (your machine):** the local 50-turn game with Ollama + `llama3.2:1b` (command above);
+  optionally a full 50-turn paid constrained run for a paid-model baseline.

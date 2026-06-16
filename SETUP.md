@@ -169,3 +169,32 @@ macOS arm64 · Docker 29.4.0 · Python 3.11.15 (uv) · civrealm 0.1.2 · gymnasi
 selenium 4.9.1 · tornado 6.3.2 · ray 2.6.3 · numpy 2.4.6 · setuptools 80.10.2 · mcp 1.27.2
 freeciv-web image: civrealm/freeciv-web:latest (digest sha256:4923253876a7, linux/amd64)
 ```
+
+## Local-LLM contestant for the play loop (Ollama — cross-platform, zero API usage)
+
+The single-agent play loop's contestant is pluggable: a `claude` subagent (`--backend claude`,
+default) or a small **local model via Ollama** (`--backend local`). Ollama wraps llama.cpp/GGUF,
+so it runs on macOS / Linux / Windows (no API key, no usage).
+
+Install Ollama (cross-platform):
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh     # recommended on Linux AND macOS
+# macOS alternatives: `brew install ollama` (CLI only) · `brew install --cask ollama` (GUI app)
+#                     · or the app from https://ollama.com/download
+```
+
+Start the server (the app/service does this automatically) and pull the model:
+
+```bash
+ollama serve &                  # if not already running as a service
+ollama pull llama3.2:1b         # Llama-3.2-1B-Instruct, ~1.3 GB GGUF
+```
+
+Run the play loop against it (constrained mode → illegal actions impossible by construction):
+
+```bash
+.venv/bin/python -m playloop.loop --backend local --model llama3.2:1b --max-turns 50
+# default --model for --backend local is llama3.2:1b; set OLLAMA_HOST if not localhost:11434
+```
+

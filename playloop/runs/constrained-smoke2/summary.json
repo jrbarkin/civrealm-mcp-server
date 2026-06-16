@@ -1,0 +1,63 @@
+{
+  "model": "claude-sonnet-4-6",
+  "mode": "constrained",
+  "turns_played": 2,
+  "max_turns": 2,
+  "completed_without_crash": true,
+  "run_error": null,
+  "final_turn": 2,
+  "final_score": 1,
+  "final_units": 4,
+  "final_cities": 1,
+  "terminated": false,
+  "truncated": true,
+  "game_results": {},
+  "totals": {
+    "attempted": 11,
+    "applied": 11,
+    "illegal": 0,
+    "malformed": 0,
+    "duplicate": 0,
+    "skipped": 3,
+    "stale": 0,
+    "bad_index": 0,
+    "unknown_actor": 0
+  },
+  "decisions_total": 11,
+  "illegal_action_rate": 0.0,
+  "selection_error_total": 0,
+  "applied_action_families": {
+    "found_city": 1,
+    "move": 5,
+    "research_tech": 2,
+    "terrain_improve": 2,
+    "hut": 1
+  },
+  "demonstrably_playing": {
+    "founded_cities": 1,
+    "unit_moves": 5,
+    "research_actions": 2,
+    "city_production_actions": 0,
+    "terrain_improvements": 2
+  },
+  "win_rule": {
+    "primary": "score",
+    "tiebreak": [
+      "cities",
+      "techs",
+      "population",
+      "units"
+    ],
+    "note": "higher primary at cap wins; ties broken in tiebreak order"
+  },
+  "final_result": {
+    "player_id": 0,
+    "score": 1,
+    "techs": 1,
+    "cities": 1,
+    "population": 1,
+    "units": 6,
+    "turn": 3
+  },
+  "total_cost_usd": 0.1267
+}

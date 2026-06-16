@@ -31,7 +31,7 @@ import traceback
 from collections import Counter
 
 from civrealm_mcp.core import COMPASS_TO_GOTO, CivRealmGame
-from playloop.contestant import ClaudeSubagentContestant
+from playloop.contestant import ClaudeSubagentContestant, OllamaContestant
 from playloop.representation import build_choice_menu, raw_snapshot, render, render_menu, shape
 from playloop.winrule import DEFAULT_PRIMARY, DEFAULT_TIEBREAK, get_final_result
 
@@ -76,6 +76,66 @@ def action_family(action: str) -> str:
     return a.split("_")[0] if a else "unknown"
 
 
+def invalid_selections(menu, choices: dict) -> dict:
+    """PURE. Return {actor_key: info} for every choice that can't be applied — the basis for the
+    error feedback sent back to the contestant. Option 0 (skip) and any listed number are valid."""
+    bad: dict[str, dict] = {}
+    for ak, opt in (choices or {}).items():
+        if ak not in menu.index:
+            bad[ak] = {"got": opt, "reason": "unknown actor id"}
+            continue
+        try:
+            oi = int(opt)
+        except (TypeError, ValueError):
+            bad[ak] = {"got": opt, "reason": "not a number", "valid_options": sorted(menu.index[ak])}
+            continue
+        if oi not in menu.index[ak]:
+            bad[ak] = {"got": opt, "reason": "option out of range", "valid_options": sorted(menu.index[ak])}
+    return bad
+
+
+def build_feedback(menu_text: str, bad: dict, valid_actors: list[str]) -> str:
+    """PURE. Re-send the menu plus an error message enumerating the acceptable options."""
+    lines = [menu_text, "",
+             "Your previous answer had INVALID selections. Resend the full choices JSON, fixing these:"]
+    for ak, info in bad.items():
+        if "valid_options" in info:
+            lines.append(f"- {ak}: you chose {info['got']!r} ({info['reason']}); "
+                         f"valid option numbers for {ak} are {info['valid_options']}.")
+        else:
+            sample = ", ".join(valid_actors[:6])
+            lines.append(f"- {ak}: {info['reason']} — not one of your actors. "
+                         f"Use actor ids exactly as listed (e.g. {sample}).")
+    return "\n".join(lines)
+
+
+def resolve_choices(contestant, menu, menu_text: str, max_retries: int = 2) -> tuple[dict, dict]:
+    """Ask the contestant for option-number choices; if any are invalid, send feedback that
+    enumerates the valid options and retry (merging only the corrected actors). Returns
+    (choices, meta) where meta carries plan/error/ms/cost and the retry count."""
+    res = contestant.choose_constrained(menu_text)
+    choices = dict(res.choices or {})
+    meta = {"plan": res.plan, "error": res.error, "ms": res.duration_ms or 0,
+            "cost": res.cost_usd or 0, "retries": 0}
+    valid_actors = list(menu.index.keys())
+    for _ in range(max_retries):
+        bad = invalid_selections(menu, choices)
+        if not bad:
+            break
+        meta["retries"] += 1
+        r = contestant.choose_constrained(build_feedback(menu_text, bad, valid_actors))
+        meta["ms"] += r.duration_ms or 0
+        meta["cost"] += r.cost_usd or 0
+        if r.error:
+            meta["error"] = r.error
+        if not r.choices:
+            break
+        for ak in bad:  # accept corrections only for the actors that were invalid
+            if ak in r.choices:
+                choices[ak] = r.choices[ak]
+    return choices, meta
+
+
 def apply_freeform(game: CivRealmGame, choice) -> dict:
     acted: set[tuple[str, str]] = set()
     c: Counter = Counter()
@@ -117,16 +177,16 @@ def apply_freeform(game: CivRealmGame, choice) -> dict:
             "run_error": run_error, "parsed": moves}
 
 
-def apply_constrained(game: CivRealmGame, menu, choice) -> dict:
-    """Apply the contestant's option-number choices. Illegal actions are impossible by
-    construction; the only paths to a non-zero illegal count are index/parse bugs (tracked
-    separately) or a rare cross-actor staleness, which we also count."""
+def apply_constrained(game: CivRealmGame, menu, choices: dict) -> dict:
+    """Apply the contestant's (already retry-resolved) option-number choices. Illegal actions are
+    impossible by construction; residual bad_index/unknown_actor (after retries) are tracked, and a
+    rare cross-actor staleness is counted as `stale` (benign, skipped)."""
     acted: set[tuple[str, str]] = set()
     c: Counter = Counter()
     per_move: list[dict] = []
     fam: Counter = Counter()
     run_error = None
-    choices = choice.choices or {}
+    choices = choices or {}
     attempted = 0
     for actor_key, opt in choices.items():
         if game.done:
@@ -180,15 +240,18 @@ def apply_constrained(game: CivRealmGame, menu, choice) -> dict:
 
 
 def play(max_turns: int, client_port: int, username: str, model: str, out_dir: str,
-         mode: str = "constrained", primary_metric: str = DEFAULT_PRIMARY) -> dict:
+         mode: str = "constrained", primary_metric: str = DEFAULT_PRIMARY,
+         backend: str = "claude") -> dict:
     os.makedirs(out_dir, exist_ok=True)
     metrics_path = os.path.join(out_dir, "metrics.jsonl")
     transcript_path = os.path.join(out_dir, "transcript.json")
     summary_path = os.path.join(out_dir, "summary.json")
 
-    contestant = ClaudeSubagentContestant(model=model)
+    contestant = (OllamaContestant(model=model) if backend == "local"
+                  else ClaudeSubagentContestant(model=model))
     game = CivRealmGame()
-    _log(f"[loop] start: port={client_port} max_turns={max_turns} model={model} mode={mode}")
+    _log(f"[loop] start: backend={backend} contestant={contestant.name()} "
+         f"port={client_port} max_turns={max_turns} mode={mode}")
     game.start(client_port=client_port, max_turns=max_turns, username=username)
     _log(f"[loop] reset done. my_player_id={game.my_player_id()} turn={game.turn}")
 
@@ -213,12 +276,14 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
             if mode == "constrained":
                 menu = build_choice_menu(game)
                 state_text = render_menu(menu)
-                choice = contestant.choose_constrained(state_text)
-                ap = apply_constrained(game, menu, choice)
+                choices, meta = resolve_choices(contestant, menu, state_text)
+                ap = apply_constrained(game, menu, choices)
             else:
                 state_text = render(shaped)
                 choice = contestant.choose(state_text)
                 ap = apply_freeform(game, choice)
+                meta = {"plan": choice.plan, "error": choice.error,
+                        "ms": choice.duration_ms, "cost": choice.cost_usd, "retries": 0}
 
             run_error = ap["run_error"]
             if not game.done and run_error is None:
@@ -242,8 +307,8 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
                 "bad_index": ap["bad_index"], "unknown_actor": ap["unknown_actor"],
                 "illegal_rate": round(illegal_rate, 3), "selection_errors": selection_errors,
                 "applied_families": dict(ap["families"]),
-                "plan": choice.plan, "subagent_error": choice.error,
-                "subagent_ms": choice.duration_ms, "subagent_cost_usd": choice.cost_usd,
+                "plan": meta["plan"], "subagent_error": meta["error"], "retries": meta["retries"],
+                "subagent_ms": meta["ms"], "subagent_cost_usd": meta["cost"],
                 "reward": game.reward, "terminated": game.terminated, "truncated": game.truncated,
             }
             metrics.append(row)
@@ -253,12 +318,13 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
             for k in ("attempted", "applied", "illegal", "malformed", "duplicate",
                       "skipped", "stale", "bad_index", "unknown_actor"):
                 totals[k] += ap.get(k, 0)
+            totals["retries"] += meta["retries"]
             applied_family_totals.update(ap["families"])
 
             transcript.append({
                 "turn": turn, "mode": mode, "state_text": state_text,
-                "subagent": {"plan": choice.plan, "error": choice.error, "raw": choice.raw,
-                             "ms": choice.duration_ms, "cost_usd": choice.cost_usd},
+                "subagent": {"plan": meta["plan"], "error": meta["error"], "retries": meta["retries"],
+                             "ms": meta["ms"], "cost_usd": meta["cost"]},
                 "parsed": ap["parsed"], "per_move": ap["per_move"],
                 "raw_snapshot": raw_snapshot(game) if turn == first_turn else None,
             })
@@ -267,7 +333,8 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
                  f"| offered={actors_offered}a/{actions_offered}act attempted={ap['attempted']} "
                  f"applied={ap['applied']} illegal={ap['illegal']} stale={ap.get('stale', 0)} "
                  f"skip={ap['skipped']} badidx={ap['bad_index']} unkactor={ap['unknown_actor']} "
-                 f"| {dict(ap['families'])}" + (f" | ERR={choice.error}" if choice.error else ""))
+                 f"retries={meta['retries']} | {dict(ap['families'])}"
+                 + (f" | ERR={meta['error']}" if meta['error'] else ""))
 
             if run_error:
                 _log(f"[loop] stopping early: {run_error}")
@@ -281,7 +348,7 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
     final_result = get_final_result(game)
 
     summary = {
-        "model": model, "mode": mode,
+        "model": model, "backend": backend, "contestant": contestant.name(), "mode": mode,
         "turns_played": len(metrics), "max_turns": max_turns,
         "completed_without_crash": run_error is None,
         "run_error": run_error,
@@ -333,17 +400,21 @@ def main() -> int:
     ap.add_argument("--max-turns", type=int, default=50)
     ap.add_argument("--client-port", type=int, default=6001)
     ap.add_argument("--username", type=str, default="myagent")
-    ap.add_argument("--model", type=str, default="claude-opus-4-8")
+    ap.add_argument("--backend", choices=["claude", "local"], default="claude",
+                    help="claude = `claude` CLI subagent; local = MLX local model (zero API usage)")
+    ap.add_argument("--model", type=str, default=None,
+                    help="default: claude-opus-4-8 (claude) or mlx Llama-3.2-1B-Instruct-4bit (local)")
     ap.add_argument("--mode", choices=["constrained", "freeform"], default="constrained")
     ap.add_argument("--primary-metric", type=str, default=DEFAULT_PRIMARY)
     ap.add_argument("--out-dir", type=str, default=None)
     args = ap.parse_args()
 
+    model = args.model or ("llama3.2:1b" if args.backend == "local" else "claude-opus-4-8")
     out_dir = args.out_dir or os.path.join(
         os.path.dirname(__file__), "runs", _dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
     try:
-        summary = play(args.max_turns, args.client_port, args.username, args.model, out_dir,
-                       mode=args.mode, primary_metric=args.primary_metric)
+        summary = play(args.max_turns, args.client_port, args.username, model, out_dir,
+                       mode=args.mode, primary_metric=args.primary_metric, backend=args.backend)
     except Exception:
         _log("[loop] FATAL:\n" + traceback.format_exc())
         return 1
