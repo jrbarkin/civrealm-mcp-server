@@ -30,6 +30,9 @@ government), the EXACT list of legal action keys you may choose from THIS turn. 
 e.g. "goto_1", NOT "move_North".
 - Only choose keys that appear in that actor's list. Acting is better than idling: move or use \
 most units every turn, and found cities when you can.
+- To leave a unit where it is, use the HOLD action that appears in THAT unit's list — usually \
+"keep_activity" (annotated [hold: ...]). Do NOT use "fortify" or "sentry" unless that exact key \
+appears in that unit's list; many units cannot fortify on a given turn.
 
 Respond with ONLY a JSON object — no prose, no markdown, no code fences:
 {"plan": "<one short sentence on your intent this turn>", "moves": [{"ctrl_type": "unit", \

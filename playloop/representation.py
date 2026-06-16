@@ -33,10 +33,24 @@ ACTION_CAP = 60  # max legal actions listed per actor; overflow is reported, not
 CTRL_ORDER = ["unit", "city", "tech", "gov", "player", "dipl"]
 
 
+# "Hold/idle a unit" is the #1 source of illegal proposals: the model reaches for `fortify`,
+# but the legal hold action depends on unit state (`fortify` vs `keep_activity` vs the unit
+# must `cancel_order` first). Annotate whichever hold actions are actually offered so the model
+# picks the listed one instead of defaulting to `fortify`.
+HOLD_HINTS = {
+    "keep_activity": "hold: stay put / keep doing current activity",
+    "fortify": "hold: dig in (defensive)",
+    "sentry": "hold: wait and watch",
+    "cancel_order": "stop this unit's current order",
+}
+
+
 def _annotate(action_key: str) -> str:
     """Add a readable hint to cryptic keys; the model still returns the raw key."""
     if action_key in GOTO_TO_COMPASS:
         return f"{action_key} [{GOTO_TO_COMPASS[action_key]}]"
+    if action_key in HOLD_HINTS:
+        return f"{action_key} [{HOLD_HINTS[action_key]}]"
     return action_key
 
 

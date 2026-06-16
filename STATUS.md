@@ -169,3 +169,38 @@ Neither was applied here (the task says stop and report after the run); both are
 ## Reproduce
 Docker server up (see SETUP.md), then:
 `.venv/bin/python -m playloop.loop --max-turns 50` (or a smaller cap to validate quickly).
+
+---
+
+## Follow-up (2026-06-16): hold-action fix + cheaper-model A/B
+
+Applied the representation fix and re-tested with **Claude Sonnet 4.6** (the contestant is a
+`--model` flag). The fix is principled, not leniency: `representation.py` now annotates the
+hold/idle actions (`keep_activity [hold: stay put]`, `fortify [hold: dig in]`, …) so the listed
+hold action is unambiguous, and the contestant prompt steers to "use the HOLD action in THAT
+unit's list; don't use fortify unless it's listed." No silent aliasing was added, so the
+illegal-action rate still honestly measures adherence to the presented options.
+
+A/B (illegal-action rate; all runs completed the cap, no crash, demonstrably playing):
+
+| run | turns | illegal rate | fortify-illegals | score | cities |
+|---|---|---|---|---|---|
+| Opus 4.8, original representation | 50 | **16.6%** | 92 | 16 | 3 |
+| Sonnet 4.6, original representation | 30 | **1.3%** | 0 | 10 | 2 |
+| Sonnet 4.6, **fixed** representation | 30 | **0.0%** | 0 | 10 | 2 |
+
+**Two findings:**
+1. **The illegal-action problem was model-specific, not a representation flaw.** Sonnet 4.6 made
+   *zero* `fortify` mistakes on the *original* representation (1.3% overall, all minor) — the
+   16.6% was Opus 4.8 idiosyncratically defaulting to `fortify`. Same representation, very
+   different adherence. This matters for the eventual head-to-head: given identical valid-options,
+   contestants differ in how faithfully they pick from the list, so the production design should
+   constrain selection (enum/numbered choice) and/or tune per model — not assume one prompt fits all.
+2. **The hold-action fix helps and doesn't regress.** Sonnet went 1.3% → **0.0%** with the fix,
+   still founding cities, moving units (138), and improving terrain (52) over 30 turns.
+
+Per the "no Opus for testing" constraint this A/B used Sonnet; the projected Opus improvement
+(92/100 illegals resolved → ~1.3%) remains a data-derived projection, not a live Opus re-run.
+
+Runs: `playloop/runs/sonnet-baseline/` and `playloop/runs/sonnet-fixed/`.
+Reproduce a cheap run: `.venv/bin/python -m playloop.loop --model claude-sonnet-4-6 --max-turns 30`.
