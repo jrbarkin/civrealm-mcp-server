@@ -198,3 +198,11 @@ Run the play loop against it (constrained mode → illegal actions impossible by
 # default --model for --backend local is llama3.2:1b; set OLLAMA_HOST if not localhost:11434
 ```
 
+**Acceleration note (verified on Apple M3):** Ollama runs GGUF text models like `llama3.2:1b`
+on the **llama.cpp/GGML Metal** backend (GPU-accelerated — "offloaded 17/17 layers to GPU"),
+**not** MLX. `OLLAMA_NEW_ENGINE=1` does not switch a GGUF text model to MLX; this build's MLX
+(`mlx_metal_v3/v4`, `mlxrunner`) is for image-generation / MLX-format models. So a 1B text LLM is
+GPU-accelerated via Metal here, just not via MLX. Caveat: a 1B is too weak to play CivRealm well
+(it plays *legally* under constrained mode but founds no cities); use a larger local model (7–8B)
+or `--backend claude` for competent play.
+

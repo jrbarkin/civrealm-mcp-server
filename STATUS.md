@@ -258,3 +258,40 @@ Preconditions for a fair head-to-head (no orchestration yet).
   illegal_rate 0.0, MCP acceptance still green after the `core.py` refactor.
 - **Pending (your machine):** the local 50-turn game with Ollama + `llama3.2:1b` (command above);
   optionally a full 50-turn paid constrained run for a paid-model baseline.
+
+---
+
+# Update (2026-06-15b): local 1B run completed + Ollama/MLX findings
+
+Ran the local game (zero API usage) after installing Ollama and pulling `llama3.2:1b`.
+
+## Result — harness verified; the 1B is the bottleneck
+`playloop/runs/local-llama1b-50turn/` (constrained mode, Ollama `llama3.2:1b`, Metal/M3):
+- **50/50 turns, no crash; illegal_action_rate 0.0 across every turn; total_cost_usd 0.**
+  → Part A's "illegal impossible by construction" holds end-to-end with a real, weak model.
+- `final_result` read at the cap (Part B); the retry-feedback loop fired hard (**100 retries**).
+- **But the 1B plays incompetently:** founded 0 cities, 0 unit moves, score stayed 0, acting on only
+  ~1 of ~8 actors/turn. Concretely (turn 1): its plan was literally "build_city", yet it returned
+  `{"unit:102": 2, "city:110": 2}` — option 2 for unit:102 is `plant` (not build_city), and
+  `city:110` doesn't exist (0 cities that turn → a hallucinated actor). The retry fed back the valid
+  options each turn, but the 1B repeated the same mistakes.
+- **Read:** constrained menus + retry guarantee *legal* play and the harness never breaks, but a 1B
+  can't faithfully read the menu (invents actors, mis-maps intent→option number) — so it's legal but
+  not competent. A capable contestant is needed for real play: a larger local model (7–8B) or the
+  `claude` backend (cf. the Opus/Sonnet free-form runs that founded 2–3 cities). The harness is
+  model-agnostic; only `--model` / `--backend` changes.
+
+## Ollama / MLX (verified on this machine)
+- Ollama is **cross-platform** (wraps llama.cpp/GGUF; Metal on macOS, CUDA/CPU elsewhere) — the
+  reason we moved off the Apple-only MLX prototype.
+- **MLX is NOT used for GGUF text models here.** `llama3.2:1b` loads the GGML/**Metal** runner
+  (`ggml_metal_init`, "offloaded 17/17 layers to GPU" on the M3) — fully GPU-accelerated, but not
+  MLX. `OLLAMA_NEW_ENGINE=1` does **not** switch a GGUF text model to MLX (tested). This Ollama build
+  ships MLX (`mlx_metal_v3/v4`, an `mlxrunner`) but it's for image-generation / MLX-format models,
+  not GGUF text inference. So "Ollama + MLX for a 1B text LLM" isn't available; Metal is the accel.
+
+## Honest gaps
+- A full *constrained-vs-free-form play comparison on a capable model* wasn't run (usage). The
+  constrained smoke (Sonnet) founded a city by turn 2 like the free-form runs, suggesting no
+  regression, but the 50-turn capable-model constrained run is still open — cheapest via a larger
+  local model now that Ollama works.
