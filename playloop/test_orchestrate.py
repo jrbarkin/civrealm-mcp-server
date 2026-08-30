@@ -1,6 +1,7 @@
 """Unit tests for the orchestrator's winner->side mapping (pure, no env/model).
 
-Run: .venv/bin/python -m playloop.test_orchestrate
+Collected by `pytest`; also runnable standalone:
+    .venv/bin/python -m playloop.test_orchestrate
 """
 
 from playloop.orchestrate import winner_label_for
@@ -12,9 +13,10 @@ def _check(name, cond):
     assert cond, name
 
 
-def main() -> int:
-    A_SPEC, B_SPEC = "random:1", "local:qwen3:4b"
+A_SPEC, B_SPEC = "random:1", "local:qwen3:4b"
 
+
+def test_winner_maps_to_the_right_side():
     # A wins on score -> maps to side A's spec
     a = {"score": 5, "cities": 1, "techs": 1, "population": 1}
     b = {"score": 2, "cities": 9, "techs": 9, "population": 9}
@@ -27,6 +29,8 @@ def main() -> int:
     _check("B>A winner is B", v["winner"] == "B")
     _check("winner label -> side B spec", winner_label_for(v, A_SPEC, B_SPEC) == B_SPEC)
 
+
+def test_tie_and_tiebreak_labels():
     # Full tie -> "tie" label, no crash
     t = {"score": 0, "cities": 0, "techs": 0, "population": 0, "units": 5}
     v = decide_winner(dict(t), dict(t))
@@ -40,6 +44,11 @@ def main() -> int:
     _check("0-0 score -> techs tiebreak -> A", v["winner"] == "A" and v["by"] == "techs")
     _check("tiebreak winner maps to side A", winner_label_for(v, A_SPEC, B_SPEC) == A_SPEC)
 
+
+def main() -> int:
+    """Standalone runner, so `python -m playloop.test_orchestrate` still works."""
+    test_winner_maps_to_the_right_side()
+    test_tie_and_tiebreak_labels()
     print("ALL ORCHESTRATE MAPPING TESTS PASSED")
     return 0
 

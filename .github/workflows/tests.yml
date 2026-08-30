@@ -1,0 +1,37 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  offline-suites:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # --no-deps on purpose, and pytest installed on its own rather than via the `[test]`
+      # extra: `pip install -e ".[test]"` resolves the project's real dependencies too, which
+      # drags in civrealm -> ray 2.6.3 -> numpy (79 packages, measured). The suites under
+      # playloop/test_*.py need none of it — they are entirely offline: no CivRealm, no numpy,
+      # no requests, no network, no Docker, no model, no API key. The check that DOES need all
+      # that is scripts/acceptance_check.py, deliberately not collected (see pyproject.toml).
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install --no-deps -e .
+          pip install pytest
+
+      - name: Run the offline suites
+        run: pytest

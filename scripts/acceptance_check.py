@@ -1,6 +1,12 @@
 #!/usr/bin/env python
 """
-Phase 3 acceptance test: drive ONE CivRealm game PURELY through the MCP tools.
+Acceptance CHECK: drive ONE CivRealm game PURELY through the MCP tools.
+
+Not a unit test and deliberately not named `test_*`: it needs a live freeciv-web Docker
+server, it takes real game turns, and it asserts nothing — it PRINTS the state at each step
+for a human to read. `pytest` must not try to collect it, which is why it lives in scripts/
+rather than under a tests/ directory. The offline suites pytest does collect are
+playloop/test_*.py.
 
 This is an MCP *client*. It spawns the civrealm-mcp-server as a stdio subprocess,
 then exercises the required flow with no GUI and no direct civrealm calls:
@@ -13,7 +19,7 @@ It prints before/after state at each step.
 Prereqs: the freeciv-web Docker server must be running on http://localhost:8080
 (see SETUP.md), and this must run inside the project venv.
 
-Run:  .venv/bin/python tests/acceptance_test.py
+Run:  .venv/bin/python scripts/acceptance_check.py
 """
 
 from __future__ import annotations

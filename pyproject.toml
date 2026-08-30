@@ -4,8 +4,11 @@ version = "0.1.0"
 description = "A minimal Model Context Protocol (MCP) server exposing a single CivRealm (Freeciv) Gymnasium environment as tools, so an external agent can drive one game by hand over MCP."
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
+# MIT covers this repository's own code only. CivRealm (a hard, in-process
+# dependency) is GPL-3.0 and Freeciv is GPL-2.0-or-later; see NOTICE for what
+# that requires of anyone redistributing this together with them.
 license = { text = "MIT" }
-authors = [{ name = "civrealm-mcp-server" }]
+authors = [{ name = "Jaeke Barkin", email = "jrbarkin1@gmail.com" }]
 keywords = ["mcp", "civrealm", "freeciv", "gymnasium", "agent"]
 
 dependencies = [
@@ -22,9 +25,21 @@ dependencies = [
 # stdio MCP server entry point
 civrealm-mcp-server = "civrealm_mcp.server:main"
 
+[project.optional-dependencies]
+# Everything under playloop/test_*.py is offline and dependency-free (no civrealm, no numpy,
+# no network, no model), so the only thing a test run needs is the runner itself.
+test = ["pytest>=8"]
+
 [build-system]
 requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# Collect ONLY the offline suites. scripts/acceptance_check.py is excluded by living outside
+# these paths: it needs a live Docker freeciv-web server and asserts nothing.
+testpaths = ["playloop"]
+python_files = ["test_*.py"]
+addopts = "-q"

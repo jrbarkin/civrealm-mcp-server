@@ -1,4 +1,7 @@
-"""Unit tests for the pure decide_winner (no env needed). Run: .venv/bin/python -m playloop.test_winrule"""
+"""Unit tests for the pure decide_winner (no env needed).
+
+Collected by `pytest`; also runnable standalone: .venv/bin/python -m playloop.test_winrule
+"""
 
 from playloop.winrule import decide_winner
 
@@ -8,7 +11,7 @@ def _check(name, cond):
     assert cond, name
 
 
-def main() -> int:
+def test_primary_metric_decides():
     # A wins on primary (score)
     a = {"score": 10, "cities": 1, "techs": 1, "population": 1}
     b = {"score": 8, "cities": 9, "techs": 9, "population": 9}
@@ -19,6 +22,8 @@ def main() -> int:
     r = decide_winner(b, a)
     _check("B>A on score (swapped)", r["winner"] == "B" and r["by"] == "score")
 
+
+def test_tiebreak_order():
     # Tie on score -> first tiebreak (cities)
     a = {"score": 10, "cities": 3, "techs": 1, "population": 1}
     b = {"score": 10, "cities": 2, "techs": 9, "population": 9}
@@ -43,6 +48,8 @@ def main() -> int:
     r = decide_winner(a, b)
     _check("full tie -> tie", r["winner"] == "tie" and r["by"] is None)
 
+
+def test_primary_override_and_missing_keys():
     # Configurable primary metric (cities as primary)
     a = {"score": 1, "cities": 5, "techs": 0, "population": 0}
     b = {"score": 9, "cities": 4, "techs": 0, "population": 0}
@@ -53,6 +60,12 @@ def main() -> int:
     r = decide_winner({"score": 1}, {})
     _check("missing keys default 0", r["winner"] == "A" and r["by"] == "score")
 
+
+def main() -> int:
+    """Standalone runner, so `python -m playloop.test_winrule` still works."""
+    test_primary_metric_decides()
+    test_tiebreak_order()
+    test_primary_override_and_missing_keys()
     print("ALL WINRULE TESTS PASSED")
     return 0
 
