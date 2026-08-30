@@ -25,6 +25,16 @@ playloop/runs/
 # Captured/generated samples (kept small ones are committed explicitly)
 *.pkl
 
+# Credentials — nothing here has ever held a key (the Claude path uses existing CLI auth and
+# Ollama is local), and ANTHROPIC_API_KEY for `--backend api` is read from the environment,
+# never from a file in the tree. These rules are here so that stays true by construction.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+secrets.json
+
 # OS / editor
 .DS_Store
 .idea/

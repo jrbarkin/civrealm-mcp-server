@@ -1,0 +1,131 @@
+NOTICE — licensing of civrealm-mcp-server and its third-party components
+=======================================================================
+
+First-party code
+----------------
+Everything in this repository that was written for it — src/civrealm_mcp/,
+playloop/*.py, scripts/, .github/, and the Markdown documents — is
+Copyright (c) 2026 Jaeke Barkin and is released under the MIT License, the
+full text of which is in LICENSE.
+
+(An earlier draft of this file also listed `plot_game_scores/` as first-party
+MIT code. That was wrong twice over and the line is gone: the directory holds
+32 PNG score plots, so it is not code, and CivRealm — not this repository —
+generates them, so they are the output of a GPL-3.0 program rather than
+anything written here. It is gitignored and has never been committed, so no
+wrongly-licensed file was ever distributed.)
+
+The committed play-loop run outputs under `playloop/runs/` (metrics.jsonl,
+transcript.json, summary.json, orchestration.json, turnlog.txt) and the two
+`EXAMPLE_*.txt` samples are output produced by running this code against
+CivRealm. They are MIT as far as this project's own contribution goes, with
+one carve-out: six transcripts also contain verbatim Freeciv helptext, which
+is Freeciv's and is covered by §2 below.
+
+No third-party source code is vendored into this repository. It reimplements
+no Freeciv game logic. What follows describes components it depends on, and
+the two pieces of third-party *data* that are checked in.
+
+
+1. CivRealm — GPL-3.0 — https://github.com/bigai-ai/civrealm
+--------------------------------------------------------------------------
+CivRealm supplies the Gymnasium environment this project drives. It is a hard
+runtime dependency (pyproject.toml pins `civrealm==0.1.2`) and it is imported
+**in-process**, not called over a socket:
+
+    src/civrealm_mcp/core.py, in CivRealmGame.start():
+        from civrealm.configs import fc_args
+        from civrealm.envs.freeciv_base_env import FreecivBaseEnv
+
+CivRealm is distributed under the GNU General Public License v3. (Upstream
+metadata is self-inconsistent: the wheel's METADATA field reads "GLP3.0" — a
+typo — and carries an LGPLv3 trove classifier, but the LICENSE file shipped
+inside the distribution is the verbatim GPL-3.0 text. The license file
+governs; treat CivRealm as GPL-3.0.)
+
+What that means here:
+
+  * CivRealm is **not** redistributed by this repository. Users install it
+    themselves (see SETUP.md). Nothing in this tree is a derivative of, or
+    contains any code from, CivRealm.
+
+  * The MIT license on this project's own code is GPL-compatible, so the
+    combination is legal to make. But because the import is in-process, the
+    running combination of this code plus CivRealm is, on the FSF's reading,
+    a single combined work. **Anyone who distributes that combination — a
+    container image, a bundled installer, a wheel with CivRealm vendored in —
+    must do so under GPL-3.0**, and must offer corresponding source for the
+    whole of it. Distributing this repository on its own, as source that
+    merely names CivRealm as a dependency, does not trigger that.
+
+  * Running it privately is not distribution and triggers nothing.
+
+
+2. Freeciv — GPL-2.0-or-later — https://github.com/freeciv/freeciv
+--------------------------------------------------------------------------
+(This section covers the first of the two checked-in third-party data items;
+the second, an eight-entry direction table from CivRealm, is §4.)
+
+Freeciv is the game underneath CivRealm. Its rulesets ship human-readable
+helptext for technologies, units, and improvements.
+
+Verbatim Freeciv ruleset helptext is **checked into this repository**, inside
+the first-turn `raw_snapshot` field of six play-loop transcripts:
+
+    playloop/runs/constrained-smoke2/transcript.json
+    playloop/runs/local-llama1b-50turn/transcript.json
+    playloop/runs/local-llama1b-schema/transcript.json
+    playloop/runs/main/transcript.json
+    playloop/runs/sonnet-baseline/transcript.json
+    playloop/runs/sonnet-fixed/transcript.json
+
+Each of those files carries roughly 0.22 MB of raw snapshot, of which about
+27 KB across ~115 `helptext` fields is verbatim Freeciv prose (e.g. "The
+Carrier is a mobile airport."). That text is Freeciv's, licensed
+GPL-2.0-or-later, and redistributing these files redistributes it. It is
+captured observation data, not code, and it is not used by anything at
+runtime — see the "Transcript raw_snapshot" note in README.md.
+
+
+3. freeciv-web — AGPL-3.0 — https://github.com/freeciv/freeciv-web
+--------------------------------------------------------------------------
+freeciv-web is the game server CivRealm talks to. This project neither
+contains nor modifies any part of it; SETUP.md instructs the user to run the
+stock upstream image as a **separate process**, reached over the network:
+
+    docker run -d --name freeciv-web --rm -p 8080:80 freeciv/freeciv-web:latest
+
+Because it is a separate program communicating at arm's length over a
+network protocol, it is not combined with this code, and the AGPL does not
+reach this repository. AGPL-3.0 §13's obligation — to offer users interacting
+with the server over a network the corresponding source of the version they
+are running — falls on whoever operates a **modified** freeciv-web. Running
+the unmodified upstream image locally adds no obligation beyond what upstream
+already satisfies.
+
+
+4. One transcribed fact table from CivRealm
+--------------------------------------------------------------------------
+`GOTO_TO_COMPASS` in `src/civrealm_mcp/core.py` maps CivRealm's eight
+`goto_<n>` action keys to compass directions:
+
+    goto_0 -> move_NorthWest, goto_1 -> move_North, ... goto_7 -> move_SouthEast
+
+Those eight pairings were read off CivRealm's own
+`configs/llm_wrapper_settings.yaml` — they have to match it exactly or the
+compass annotations this repo shows a model would be wrong — and the source is
+named in a comment at the definition. It is a bare correspondence table, not
+code: no CivRealm source is copied, and nothing about how CivRealm computes or
+executes a move is reproduced. It is called out here only so that "no
+third-party source code is vendored" is not read as "nothing at all was taken
+from upstream".
+
+
+Summary
+-------
+  This repository's own code ......... MIT (LICENSE)
+  CivRealm (runtime dep, imported) ... GPL-3.0  -> combined-work distribution
+                                                   must be GPL-3.0
+  Freeciv helptext (in transcripts) .. GPL-2.0-or-later
+  CivRealm goto->compass table (§4) .. 8-entry fact table, attributed in-source
+  freeciv-web (separate server) ...... AGPL-3.0 -> obligation is the operator's
