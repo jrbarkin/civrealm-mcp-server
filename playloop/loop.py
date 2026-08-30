@@ -381,6 +381,13 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
         "turns_played": len(metrics), "max_turns": max_turns,
         "completed_without_crash": run_error is None,
         "run_error": run_error,
+        # `completed_without_crash` tracks the ENVIRONMENT only. A run whose contestant failed
+        # every single turn still ends with run_error None and turns_played == max_turns, because
+        # the loop is deliberately built to survive a contestant that errors. That is how
+        # runs/ab-opus48-50t/constrained-seed43-credit-exhausted/ reports itself as a clean
+        # 50-turn run when 25 of its turns had no model in the loop at all. So count it here:
+        # a non-zero value means the top-line numbers above are not what they look like.
+        "turns_with_contestant_error": sum(1 for r in metrics if r.get("subagent_error")),
         "final_turn": last.get("turn"),
         "final_score": last.get("score"),
         "final_units": last.get("num_units"),

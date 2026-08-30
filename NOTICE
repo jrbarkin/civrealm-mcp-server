@@ -70,21 +70,27 @@ Freeciv is the game underneath CivRealm. Its rulesets ship human-readable
 helptext for technologies, units, and improvements.
 
 Verbatim Freeciv ruleset helptext is **checked into this repository**, inside
-the first-turn `raw_snapshot` field of six play-loop transcripts:
+the `raw_snapshot` field that `playloop/loop.py` records on the FIRST TURN of
+every run. The rule, rather than a list that goes stale: **every committed
+`playloop/runs/*/transcript.json` carries one**, and each one contains about
+27.5 KB of verbatim Freeciv prose across exactly 115 `helptext` fields (e.g.
+"The Carrier is a mobile airport.").
 
-    playloop/runs/constrained-smoke2/transcript.json
-    playloop/runs/local-llama1b-50turn/transcript.json
-    playloop/runs/local-llama1b-schema/transcript.json
-    playloop/runs/main/transcript.json
-    playloop/runs/sonnet-baseline/transcript.json
-    playloop/runs/sonnet-fixed/transcript.json
+As of this commit that is **11 transcripts** — the eight original run
+directories plus the five under `playloop/runs/ab-opus48-50t/` (of which
+three are constrained/free-form results and two are failed attempts kept as
+evidence), less those directories that hold no transcript. Together they are
+9.39 MB, of which 2.57 MB (27%) is raw snapshot and roughly 302 KB is
+Freeciv's helptext.
 
-Each of those files carries roughly 0.22 MB of raw snapshot, of which about
-27 KB across ~115 `helptext` fields is verbatim Freeciv prose (e.g. "The
-Carrier is a mobile airport."). That text is Freeciv's, licensed
-GPL-2.0-or-later, and redistributing these files redistributes it. It is
-captured observation data, not code, and it is not used by anything at
-runtime — see the "Transcript raw_snapshot" note in README.md.
+To enumerate them at any commit:
+
+    git ls-files 'playloop/runs/*/transcript.json'
+
+That text is Freeciv's, licensed GPL-2.0-or-later, and redistributing these
+files redistributes it. It is captured observation data, not code, and it is
+not used by anything at runtime — see the "Transcript raw_snapshot" note in
+README.md.
 
 
 3. freeciv-web — AGPL-3.0 — https://github.com/freeciv/freeciv-web

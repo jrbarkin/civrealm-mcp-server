@@ -188,6 +188,23 @@ def test_non_object_json_is_rejected_not_crashed():
     _check("_norm_moves tolerates an empty dict", _norm_moves({}) == [])
 
 
+def test_summary_counts_turns_whose_contestant_failed():
+    """REGRESSION. `completed_without_crash` only watches the ENVIRONMENT, so a run whose
+    contestant errored on every turn still reports run_error None and a full turn count — which
+    is exactly how the credit-exhausted run in runs/ab-opus48-50t/ reports itself as a clean
+    50-turn run with 25 dead turns in it. summary.json must carry the count so a reader of the
+    artifact alone can tell."""
+    import inspect
+
+    from playloop import loop as _loop
+
+    src = inspect.getsource(_loop.play)
+    _check("summary carries turns_with_contestant_error", '"turns_with_contestant_error"' in src)
+    # and it is derived from the per-turn field that actually records it
+    _check("counted from per-turn subagent_error",
+           'r.get("subagent_error")' in src)
+
+
 def main() -> int:
     """Standalone runner, so `python -m playloop.test_retry` still works."""
     test_invalid_selections_and_feedback()
@@ -196,6 +213,7 @@ def main() -> int:
     test_claude_cli_invocation_carries_the_schema()
     test_claude_cli_null_structured_output_is_an_error()
     test_non_object_json_is_rejected_not_crashed()
+    test_summary_counts_turns_whose_contestant_failed()
     print("ALL RETRY TESTS PASSED")
     return 0
 

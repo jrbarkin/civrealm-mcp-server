@@ -39,12 +39,51 @@ In free-form mode the model returns action strings and the loop validates each o
 16.6% measures how faithfully the model copied from the list it was shown — not bad moves landing
 on the board.
 
-**The arrow in that heading crosses models and run lengths, and no committed run closes it.** The
-16.6% is Opus over 50 free-form turns; there is no Opus constrained run at all. The nearest
-same-model pair is Sonnet 4.6 — 1.3% over 30 free-form turns vs 0.0% over a **2-turn** constrained
-smoke (11 actions). So read the table as "free-form leaks at a model-specific rate; constrained
-selection has never leaked", not as a controlled A/B. Closing it properly means one model, one
-length, both modes — see "Scope" below for what else is missing.
+### The controlled pair: `playloop/runs/ab-opus48-50t`
+
+The rows above compare across models and run lengths. This one does not. Same model
+(`claude-opus-4-8`), same length (50 turns), same seed within each pair, same backend
+(`--backend api`, where the schema constrains the decoder) — **`--mode` is the only difference**.
+Pre-registered in
+[`playloop/runs/ab-opus48-50t/PREREGISTRATION.md`](playloop/runs/ab-opus48-50t/PREREGISTRATION.md),
+committed in `62ad71e` **before the first run**.
+
+| seed | mode | unusable selections | applied | actors never addressed | score | retries |
+|---|---|---|---|---|---|---|
+| 42 | free-form | **13.62%** (88/646) | 558 | 19.0% | 11 | 0 |
+| 42 | constrained | **0.0000%** (0/899) | 797 | 0% | 12 | 0 |
+| 43 | free-form | **17.50%** (109/623) | 514 | 17.2% | 13 | 0 |
+| 43 | constrained | **0.0000%** (0/973) | 864 | 0% | 10 | 0 |
+
+*Unusable selections* is the pre-registered primary metric: the fraction of the model's per-actor
+decisions naming something not on offer. It is measured in each arm's own units — free-form
+`(illegal + malformed)`, constrained `(bad_index + unknown_actor)` — because `illegal` is a
+structural 0 in constrained mode and quoting it would be circular. **The denominators differ and
+the comparison is therefore not exact**: free-form counts only decisions the model volunteered,
+constrained counts every actor, because the schema requires an answer for each. That caveat was
+written down before the runs, not after.
+
+Read together: **zero unusable selections in 1,872 constrained decisions across both seeds, against
+13.6% and 17.5% free-form.** None of the four pre-registered conditions for "the constraint did not
+help" fired.
+
+Three things worth more than the headline:
+
+- **The schema stops omission, not just illegality.** The free-form arm silently never answered for
+  17-19% of the actors it was shown. The constrained arm answered for all of them — `required` in
+  the schema is doing as much work as `enum`.
+- **The `fortify` story replicates, but it is only half the story.** README used to attribute the
+  bulk of free-form errors to Opus reaching for `fortify` when the legal hold was `keep_activity`;
+  that was 92 of 100 in `runs/main`, and 92 of 197 here. The other near-half is illegal `goto_*`
+  (90 of 197) — moving in a direction that is not legal from that tile. Two failure modes, not one.
+- **Constraint did not buy a better game.** Score 12 vs 11 on seed 42 and 10 vs 13 on seed 43 —
+  mixed, no effect worth claiming. This experiment is about output legality, not Freeciv skill.
+
+Honest limits: two seeds, one run each, one model. Both seeds agree, but this is not a variance
+estimate. Reaching 50 turns on the seed-43 constrained arm took three attempts — the first was
+killed externally at turn 46, the second ran out of API credit at turn 26. Both failed attempts are
+committed next to the result (`constrained-seed43-interrupted`, `constrained-seed43-credit-exhausted`)
+with notes, because the pre-registration said no run would be discarded.
 
 Constrained mode replaces strings with **option numbers from a per-actor numbered menu of that
 actor's legal actions** (`representation.build_choice_menu`), and `menu_to_schema` turns that menu
@@ -91,12 +130,12 @@ Three honest caveats:
   `fortify` to hold a unit when the legal hold action was `keep_activity`. Sonnet 4.6 made zero
   such mistakes on the *same* representation (1.3% overall). So the gap that constraint closes is
   real but was much wider for one model than another.
-- **The default backend is the weakest of the three, and it is the one behind the numbers above.**
-  Every committed Claude run predates the `--json-schema` wiring, so on those runs the schema was
-  built and then discarded, and "0 illegal" rests entirely on the loop resolving option numbers
-  through the menu index. The schema now reaches the CLI, but as validate-and-retry (table above),
-  and there is still **no committed run on `--backend api`** — the decoder-enforced Claude path is
-  verified turn-by-turn against a real committed menu, not across a whole game.
+- **The default backend is the weakest of the three, and it is the one behind the six rows above.**
+  Every committed *Claude CLI* run predates the `--json-schema` wiring, so on those runs the schema
+  was built and then discarded, and their "0 illegal" rests entirely on the loop resolving option
+  numbers through the menu index. The schema now reaches the CLI, but as validate-and-retry (table
+  above). The decoder-enforced claim rests on `runs/ab-opus48-50t` (`--backend api`) and on the
+  local Ollama runs — not on the default path.
 
 A secondary result, from the same runs: the schema fixed *selection* quality for a weak model.
 With `format:"json"` only, `llama3.2:1b` hallucinated actor keys on all 50 turns and triggered 100
@@ -203,9 +242,10 @@ and the two aborted 50-turn constrained attempts — exist only on the machine t
   verdict). No model has played either side. The mechanism — shared game, sequential phases, no
   deadlock, a decided winner — works; the tournament does not exist.
 - **No tournament, bracket, Elo or rating.** Nothing in here ranks anything.
-- **No capable-model 50-turn constrained run.** The constrained runs are 2-turn smokes (Claude,
-  qwen3:4b) and local 1B runs. `playloop/runs/constrained-sonnet50` and `constrained-haiku50` hold
-  3 and 5 turns of metrics with no `summary.json` — aborted runs, not results.
+- **~~No capable-model 50-turn constrained run.~~** Closed by `runs/ab-opus48-50t`: two 50-turn
+  Opus 4.8 constrained runs, decoder-enforced, committed. The older aborted attempts
+  (`constrained-sonnet50`, `constrained-haiku50`: 3 and 5 turns of metrics, no `summary.json`)
+  remain what they were — not results, and not in the tree.
 - **No verified victory path.** Every capped run ends `truncated` at the turn cap, which is why
   the score-based win rule exists at all. The only `terminated` ever observed was a random
   contestant's player being *eliminated* mid-orchestration-test — never a win condition.
@@ -317,9 +357,9 @@ Running any of this privately is not distribution and triggers none of the above
 ### Transcript `raw_snapshot`
 
 `playloop/loop.py` records one `raw_snapshot(game)` on a run's first turn (every later turn stores
-`null`), so raw→shaped decisions stay auditable. All six committed transcripts carry one, 0.23 MB
-each — **1.40 MB of the 4.21 MB** of tracked transcript data. 27.5 KB of each snapshot, across
-exactly 115 `helptext` fields, is verbatim Freeciv prose. Nothing reads the field at runtime; it exists
-for debugging the representation layer. Dropping it would shrink the transcripts by ~33% and remove
+`null`), so raw→shaped decisions stay auditable. **Every** committed transcript carries one — 11 of
+them as of this commit — totalling **2.57 MB of the 9.39 MB** of tracked transcript data (27%).
+27.5 KB of each snapshot, across exactly 115 `helptext` fields, is verbatim Freeciv prose. Nothing reads the field at runtime; it exists
+for debugging the representation layer. Dropping it would shrink the transcripts by ~27% and remove
 the GPL-2.0 text from the tree, at the cost of the raw→shaped audit trail. It is kept deliberately —
 see [NOTICE](NOTICE) §2.

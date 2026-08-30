@@ -1,0 +1,71 @@
+{
+  "model": "claude-opus-4-8",
+  "backend": "api",
+  "contestant": "anthropic-api:claude-opus-4-8",
+  "mode": "freeform",
+  "turns_played": 50,
+  "max_turns": 50,
+  "completed_without_crash": true,
+  "run_error": null,
+  "final_turn": 50,
+  "final_score": 11,
+  "final_units": 13,
+  "final_cities": 2,
+  "terminated": false,
+  "truncated": true,
+  "game_results": {},
+  "totals": {
+    "attempted": 646,
+    "applied": 558,
+    "illegal": 88,
+    "malformed": 0,
+    "duplicate": 0,
+    "skipped": 0,
+    "stale": 0,
+    "bad_index": 0,
+    "unknown_actor": 0,
+    "retries": 0
+  },
+  "decisions_total": 646,
+  "illegal_action_rate": 0.136,
+  "selection_error_total": 0,
+  "applied_action_families": {
+    "found_city": 2,
+    "move": 235,
+    "unit_hold": 158,
+    "set_tech_goal": 35,
+    "terrain_improve": 33,
+    "city_production": 92,
+    "hut": 2,
+    "attack": 1
+  },
+  "demonstrably_playing": {
+    "founded_cities": 2,
+    "unit_moves": 235,
+    "research_actions": 35,
+    "city_production_actions": 92,
+    "terrain_improvements": 33
+  },
+  "win_rule": {
+    "primary": "score",
+    "tiebreak": [
+      "cities",
+      "techs",
+      "population",
+      "units"
+    ],
+    "note": "higher primary at cap wins; ties broken in tiebreak order"
+  },
+  "final_result": {
+    "player_id": 0,
+    "score": 11,
+    "techs": 3,
+    "cities": 2,
+    "population": 6,
+    "units": 13,
+    "turn": 51
+  },
+  "total_cost_usd": 0,
+  "total_input_tokens": 216446,
+  "total_output_tokens": 24314
+}

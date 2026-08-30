@@ -18,9 +18,10 @@ Last full verification (Docker + live games): **2026-06-15**, macOS on Apple Sil
 against the Dockerized freeciv-web server. The offline test suites were re-run **2026-08-29** and
 are still green (`pytest`, 15 tests, no Docker/model/network — CI runs the same on 3.10 + 3.11).
 
-**Which runs a cloner can actually open:** `playloop/runs/` is gitignored apart from eight
+**Which runs a cloner can actually open:** `playloop/runs/` is gitignored apart from the eight
 committed directories — `main`, `sonnet-baseline`, `sonnet-fixed`, `constrained-smoke2`,
-`local-llama1b-50turn`, `local-llama1b-schema`, `orch-test1`, `orch-test2`. Run names appearing
+`local-llama1b-50turn`, `local-llama1b-schema`, `orch-test1`, `orch-test2` — plus the pre-registered
+A/B under `ab-opus48-50t/` (four measured runs, two failed attempts, and the pre-registration). Run names appearing
 below that are *not* in that list (`constrained-smoke`, `local-smoke`, `probe-qwen-smoke`,
 `probe-qwen-smoke2`, `constrained-haiku50`, `constrained-sonnet50`) exist only on the machine that
 produced them; they are cited here as history, not as evidence you can check.
@@ -46,7 +47,12 @@ Said precisely, because the strength of the guarantee is backend-specific (READM
   schema and retries. There, an illegal choice is *rejected*, not unrepresentable — and every
   committed Claude run predates even that, having discarded the schema entirely.
 
-The first bullet is what all the committed runs demonstrate, and it is the defensible claim.
+The first bullet is what all the older committed runs demonstrate. The second is now measured
+directly: `runs/ab-opus48-50t` is a pre-registered A/B — one model (`claude-opus-4-8`), one length
+(50 turns), both modes, `--backend api` on both arms so `--mode` is the only difference, seeds 42
+and 43 each run in both arms. **Free-form 13.62% and 17.50% unusable selections; constrained
+0.0000% and 0.0000% — zero in 1,872 decisions.** Pre-registration committed before the first run
+(`62ad71e`); none of its four "the constraint did not help" conditions fired.
 
 ## Current state
 
@@ -173,6 +179,17 @@ numpy, no network, no Docker, no model and no API key installed (CI does exactly
 
 ## Measured runs
 
+The four `ab-opus48-50t` rows are `--backend api`, which reports `total_cost_usd: 0`; their cost
+column is computed from the recorded `total_input_tokens`/`total_output_tokens` at Opus 4.8's
+published rate ($5/$25 per MTok). Their "illegal rate" column is the A/B's pre-registered primary
+metric, not `illegal_action_rate` — see the pre-registration for why the two differ.
+
+**A reporting defect that experiment exposed:** `completed_without_crash` watches the environment
+only, so a run whose contestant failed every turn still ends with `run_error: null` and a full turn
+count. `ab-opus48-50t/constrained-seed43-credit-exhausted/` reports itself as a clean 50-turn run
+with 25 dead turns in it. `summary.json` now also carries `turns_with_contestant_error`; the four
+runs above predate that field, and all four have zero such turns (checked from `metrics.jsonl`).
+
 Rows whose run directory is **committed** have a `summary.json` you can open at
 `playloop/runs/<run>/`; the four marked *(local only)* were run on the author's machine and are
 gitignored, so their numbers are reported here but cannot be checked from a clone.
@@ -189,6 +206,10 @@ gitignored, so their numbers are reported here but cannot be checked from a clon
 | `local-llama1b-schema` | llama3.2:1b | constrained, JSON Schema | 15 | **0.0%** | 0 | 0 | $0 |
 | `probe-qwen-smoke` *(local only)* | qwen3:4b (`think` on) | constrained | 2 | n/a — 0 actions emitted | 0 | 0 | $0 |
 | `probe-qwen-smoke2` *(local only)* | qwen3:4b (`think=False`) | constrained | 2 | 0.0% | 1 | 1 | $0 |
+| `ab-opus48-50t/freeform-seed42` | claude-opus-4-8 (api) | freeform | 50 | **13.62%** (88/646) | 11 | 2 | $1.69 |
+| `ab-opus48-50t/constrained-seed42` | claude-opus-4-8 (api) | constrained | 50 | **0.0000%** (0/899) | 12 | 2 | $2.07 |
+| `ab-opus48-50t/freeform-seed43` | claude-opus-4-8 (api) | freeform | 50 | **17.50%** (109/623) | 13 | 2 | $1.63 |
+| `ab-opus48-50t/constrained-seed43` | claude-opus-4-8 (api) | constrained | 50 | **0.0000%** (0/973) | 10 | 2 | $2.17 |
 
 `runs/constrained-haiku50` and `runs/constrained-sonnet50` are abandoned 50-turn attempts (5 and 3
 turns of `metrics.jsonl`, no `summary.json`) — stopped to conserve API usage, not results.
