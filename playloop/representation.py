@@ -18,7 +18,11 @@ Design choices (documented in REPRESENTATION.md):
   - We list the EXACT action keys the model must return (not aliases), so a low illegal-action
     rate reflects the model reading our representation, not us translating for it. `goto_*` keys
     get a readable compass annotation in brackets.
-  - We do NOT enum-constrain the model's choice, so the illegal-action rate is a real measurement.
+  - Free-form mode (`render`) does NOT enum-constrain the choice, so its illegal-action rate is a
+    real measurement of the model copying from the list it was shown. Constrained mode does the
+    opposite on purpose: `build_choice_menu` numbers each actor's legal actions and
+    `menu_to_schema` (below) turns that menu into a per-turn JSON Schema whose `enum` is exactly
+    those numbers. The two modes exist to be compared; see README's headline table.
   - Per-actor action lists are capped (default 60) with the dropped count surfaced — no silent truncation.
 """
 
@@ -266,9 +270,6 @@ class ChoiceMenu:
     # actor_key -> {option_int -> (ctrl_type, actor_id_str, action_key)};  option 0 -> None (skip)
     index: dict[str, dict[int, tuple[str, str, str] | None]]
     dropped_actions: dict = field(default_factory=dict)
-
-    def num_actors(self) -> int:
-        return len(self.actors)
 
 
 def build_choice_menu(game) -> ChoiceMenu:

@@ -7,7 +7,11 @@ until a turn cap (default 50) or game end.
 
 Two contestant modes:
   - constrained (default): the contestant picks an option NUMBER from a per-actor menu of that
-    actor's legal actions, so an illegal action is impossible by construction (Part A).
+    actor's legal actions, so an illegal action cannot reach the env — the loop resolves every
+    number through the menu index (Part A). WHERE that is additionally enforced on the model's
+    output depends on the backend: `--backend local` and `--backend api` constrain the decoder
+    with the per-turn schema, `--backend claude` (default) has the `claude` CLI validate the
+    output against the same schema and retry. See playloop/contestant.py.
   - freeform: the contestant returns free-form action strings (kept for comparison).
 
 At game end the score-based win rule's final result is read and logged (Part B).
@@ -17,6 +21,7 @@ aggregate -> <out>/summary.json. Drives the same env layer as the MCP server (ci
 
 Usage:
     .venv/bin/python -m playloop.loop --max-turns 50 [--mode constrained|freeform]
+                                      [--backend claude|local|api]
                                       [--model claude-sonnet-4-6] [--client-port 6001]
 """
 
@@ -31,7 +36,8 @@ import traceback
 from collections import Counter
 
 from civrealm_mcp.core import COMPASS_TO_GOTO, CivRealmGame
-from playloop.contestant import ClaudeSubagentContestant, OllamaContestant
+from playloop.contestant import (AnthropicSDKContestant, ClaudeSubagentContestant,
+                                 OllamaContestant)
 from playloop.representation import (build_choice_menu, menu_to_schema, raw_snapshot, render,
                                      render_menu, shape)
 from playloop.winrule import DEFAULT_PRIMARY, DEFAULT_TIEBREAK, get_final_result
@@ -116,9 +122,11 @@ def resolve_choices(contestant, menu, menu_text: str, max_retries: int = 2,
     enumerates the valid options and retry (merging only the corrected actors). Returns
     (choices, meta) where meta carries plan/error/ms/cost and the retry count.
 
-    `schema` (per-turn JSON Schema from menu_to_schema) is passed to the contestant for
-    structured-output enforcement; with it, retries should be rare (invalid output can't be
-    emitted), but the retry path remains as a backstop for contestants that ignore the schema."""
+    `schema` (per-turn JSON Schema from menu_to_schema) is passed to the contestant, but what it
+    buys depends on the backend (see playloop/contestant.py): with a decoder-constrained one
+    (local/api) an invalid selection cannot be emitted and this loop should never fire; with the
+    `claude` CLI it is validated and retried one layer down, and can still come back empty. The
+    retry path stays as the backstop for both, and for any contestant that ignores the schema."""
     res = contestant.choose_constrained(menu_text, schema=schema)
     choices = dict(res.choices or {})
     meta = {"plan": res.plan, "error": res.error, "ms": res.duration_ms or 0,
@@ -239,6 +247,12 @@ def apply_constrained(game: CivRealmGame, menu, choices: dict) -> dict:
             # option. Count it separately and skip it, so `illegal` stays 0 by construction.
             c["stale"] += 1
             per_move.append({"actor": actor_key, "opt": opt_i, "action": act, "outcome": "stale_skipped"})
+    # `illegal` is a literal 0 here, not a measurement: in constrained mode the contestant returns
+    # option NUMBERS and every one is resolved through menu.index above, so an action that was
+    # never offered cannot reach game.take_action. Out-of-range numbers are `bad_index`, unknown
+    # actors are `unknown_actor`, and options invalidated mid-turn are `stale` — all counted
+    # separately and all non-zero in real runs. The free-form path (apply_freeform) is where
+    # `illegal` is genuinely counted; that is the 16.6% the README compares against.
     return {"attempted": attempted, "applied": c["applied"], "illegal": 0, "stale": c["stale"],
             "malformed": 0, "duplicate": c["duplicate"], "skipped": c["skipped"],
             "bad_index": c["bad_index"], "unknown_actor": c["unknown_actor"],
@@ -253,8 +267,8 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
     transcript_path = os.path.join(out_dir, "transcript.json")
     summary_path = os.path.join(out_dir, "summary.json")
 
-    contestant = (OllamaContestant(model=model) if backend == "local"
-                  else ClaudeSubagentContestant(model=model))
+    contestant = {"local": OllamaContestant, "api": AnthropicSDKContestant,
+                  "claude": ClaudeSubagentContestant}[backend](model=model)
     game = CivRealmGame()
     _log(f"[loop] start: backend={backend} contestant={contestant.name()} "
          f"port={client_port} max_turns={max_turns} mode={mode}")
@@ -408,10 +422,13 @@ def main() -> int:
     ap.add_argument("--max-turns", type=int, default=50)
     ap.add_argument("--client-port", type=int, default=6001)
     ap.add_argument("--username", type=str, default="myagent")
-    ap.add_argument("--backend", choices=["claude", "local"], default="claude",
-                    help="claude = `claude` CLI subagent; local = MLX local model (zero API usage)")
+    ap.add_argument("--backend", choices=["claude", "local", "api"], default="claude",
+                    help="claude = `claude` CLI subagent (no API key; schema validated+retried by "
+                         "the CLI); local = Ollama local model (zero API usage; schema enforced at "
+                         "the decoder); api = Anthropic Messages API (needs ANTHROPIC_API_KEY; "
+                         "schema enforced at the decoder via output_config.format)")
     ap.add_argument("--model", type=str, default=None,
-                    help="default: claude-opus-4-8 (claude) or mlx Llama-3.2-1B-Instruct-4bit (local)")
+                    help="default: claude-opus-4-8 (claude/api) or llama3.2:1b (local)")
     ap.add_argument("--mode", choices=["constrained", "freeform"], default="constrained")
     ap.add_argument("--primary-metric", type=str, default=DEFAULT_PRIMARY)
     ap.add_argument("--seed", type=int, default=None, help="fix map/game/agent seeds for reproducibility")

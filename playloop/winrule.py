@@ -7,7 +7,7 @@ winner by **in-game score at the cap**, with a deterministic tiebreak.
 
 - `get_final_result(game)` reads one player's end-of-game metrics from the live state.
 - `decide_winner(stateA, stateB)` is PURE (operates on two metric dicts) so it is trivially
-  unit-testable and reusable by the (future) two-agent orchestrator.
+  unit-testable, and is reused by the two-agent orchestrator (`playloop/orchestrate.py`).
 
 Metrics come from the observation (see SCHEMA.md): score and techs from the player dict; cities
 and population (sum of city sizes) and units from the owned-entity dicts.

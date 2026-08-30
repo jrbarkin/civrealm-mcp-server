@@ -9,6 +9,17 @@ thin pass-through tools so an external MCP client (the decision-maker) can drive
 
 There is NO LLM in this server; it is a model-agnostic tool surface. See ../../SCHEMA.md.
 
+How constrained is this surface? Honestly: partly.
+  - `ctrl_type` IS closed, and is typed `CtrlType` (a Literal) below, which FastMCP renders as
+    a JSON Schema `enum` in the tool's inputSchema — so a client cannot even offer a bad one.
+  - `actor_id` and `action_name` are NOT closed: which actors exist and which actions are legal
+    changes every step, so they are validated AFTER the fact, in `_impl_take_action`, against
+    `info['available_actions']` — an illegal call returns an error plus the valid options.
+This is a different guarantee from the play loop's constrained mode, where the per-turn schema
+(playloop/representation.menu_to_schema) is built from that same legal-action list and the
+choice is an option NUMBER. Do not conflate the two: over MCP, an illegal action is *rejected*;
+in the play loop's constrained mode it is *unrepresentable*.
+
 Two implementation subtleties (both verified by running it):
 - stdio safety: CivRealm/gymnasium write to stdout via print()/warnings; the MCP stdio
   transport uses stdout for JSON-RPC. We route all non-protocol output to stderr and only
@@ -24,7 +35,7 @@ import concurrent.futures
 import functools
 import logging
 import sys
-from typing import Any
+from typing import Any, Literal
 
 # --- stdout protection (MUST happen before importing civrealm) ----------------
 _REAL_STDOUT = sys.stdout
@@ -37,6 +48,11 @@ log = logging.getLogger("civrealm_mcp")
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 
 from civrealm_mcp.core import CivRealmGame, coerce_actor_id, jsonable  # noqa: E402
+
+# The one genuinely closed enumeration in the CivRealm action tuple. Confirmed against the
+# `available_actions` keys in every committed raw_snapshot (playloop/runs/*/transcript.json):
+# unit, city, player, dipl, tech, gov — and nothing else.
+CtrlType = Literal["unit", "city", "player", "dipl", "tech", "gov"]
 
 mcp = FastMCP("civrealm")
 
@@ -99,7 +115,7 @@ def _impl_start_game(client_port: int, max_turns: int, username: str) -> dict:
     return status
 
 
-def _impl_take_action(ctrl_type: str, actor_id: int | str, action_name: str) -> dict:
+def _impl_take_action(ctrl_type: CtrlType, actor_id: int | str, action_name: str) -> dict:
     aid = coerce_actor_id(actor_id)
     if not _game.is_legal(ctrl_type, aid, action_name):
         return {
@@ -163,7 +179,8 @@ async def get_observation(keys: list[str] | None = None) -> dict:
 
 
 @mcp.tool()
-async def get_legal_actions(ctrl_type: str | None = None, actor_id: int | str | None = None) -> dict:
+async def get_legal_actions(ctrl_type: CtrlType | None = None,
+                            actor_id: int | str | None = None) -> dict:
     """Return legal actions this step as {ctrl_type: {actor_id: {action_name: validity}}} (from
     info['available_actions']). Only actors that can currently act appear. An empty result means
     no actor can act (call end_turn)."""
@@ -181,9 +198,13 @@ async def get_legal_actions(ctrl_type: str | None = None, actor_id: int | str | 
 
 
 @mcp.tool()
-async def take_action(ctrl_type: str, actor_id: int | str, action_name: str) -> dict:
+async def take_action(ctrl_type: CtrlType, actor_id: int | str, action_name: str) -> dict:
     """Perform ONE legal action for ONE actor: env.step((ctrl_type, actor_id, action_name)).
     Advances one step but does NOT end the turn — call end_turn() when done acting.
+
+    `ctrl_type` is constrained to the six controller types by the tool schema. `actor_id` and
+    `action_name` cannot be: both are turn-dependent, so they are checked against the current
+    legal-action mask and an illegal call returns an error listing what IS valid for that actor.
 
     Args:
         ctrl_type: one of unit, city, player, dipl, tech, gov.
