@@ -16,7 +16,7 @@ way. `playloop/` is also where most of the Python lives; the server itself is 24
 
 Last full verification (Docker + live games): **2026-06-15**, macOS on Apple Silicon (arm64),
 against the Dockerized freeciv-web server. The offline test suites were re-run **2026-08-29** and
-are still green (`pytest`, 15 tests, no Docker/model/network — CI runs the same on 3.10 + 3.11).
+are still green (`pytest`, 16 tests, no Docker/model/network — CI runs the same on 3.10 + 3.11).
 
 **Which runs a cloner can actually open:** `playloop/runs/` is gitignored apart from the eight
 committed directories — `main`, `sonnet-baseline`, `sonnet-fixed`, `constrained-smoke2`,
@@ -63,7 +63,7 @@ and 43 each run in both arms. **Free-form 13.62% and 17.50% unusable selections;
 | State representation | works | `REPRESENTATION.md`, `EXAMPLE_SHAPED_STATE.txt` |
 | Free-form mode (`--mode freeform`) | works; illegal rate is model-dependent | `runs/main`, `runs/sonnet-*` |
 | Constrained mode (`--mode constrained`, default) | works; **no illegal action can be applied** | `runs/constrained-smoke2`, `runs/local-llama1b-*` |
-| Retry feedback on invalid selections | works | `test_retry`: 6 tests / 28 assertions |
+| Retry feedback on invalid selections | works | `test_retry`: 7 tests / 30 assertions |
 | Score-based win rule | works | `test_winrule`: 3 tests / 9 assertions; `final_result` read at cap in every constrained run |
 | Two-side orchestrator | works — **with random contestants only** | `runs/orch-test1`, `runs/orch-test2` |
 | Local backend (Ollama) | works: `llama3.2:1b`, `qwen3:4b` | `runs/local-llama1b-*` (committed); `runs/probe-qwen-smoke2` (local only) |
@@ -172,8 +172,8 @@ per-player final score/techs/cities/population/units; the only difference is the
 
 ### Offline test suites (no env, no model, no cost)
 
-`pytest` from the repo root collects and runs all four (`test_winrule` 3, `test_retry` 6,
-`test_orchestrate` 2, `test_ollama_think` 4): **15 tests, green**, with no CivRealm, no
+`pytest` from the repo root collects and runs all four (`test_winrule` 3, `test_retry` 7,
+`test_orchestrate` 2, `test_ollama_think` 4): **16 tests, green**, with no CivRealm, no
 numpy, no network, no Docker, no model and no API key installed (CI does exactly this on 3.10 and
 3.11). Each is still runnable alone with `.venv/bin/python -m playloop.test_<name>`.
 

@@ -257,9 +257,16 @@ and the two aborted 50-turn constrained attempts — exist only on the machine t
 Full steps, including the macOS/Apple-Silicon fixes, are in **[SETUP.md](SETUP.md)**. In short:
 
 ```bash
-# 1. freeciv-web Docker server (publish only 8080 — avoids the macOS AirPlay :7000 conflict)
+# 1. freeciv-web Docker server. The image is published as civrealm/freeciv-web and CivRealm's
+#    client dials the freeciv/... name, so pull and retag (~1.5 GB down, ~13 GB on disk).
+docker pull civrealm/freeciv-web:latest
+docker tag  civrealm/freeciv-web:latest freeciv/freeciv-web:latest
+
+#    Publish ONLY 8080 — the image's default port map collides with macOS AirPlay on :7000.
 docker run -d --name freeciv-web --rm -p 8080:80 freeciv/freeciv-web:latest
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/        # -> 200
+
+#    It needs ~30s before it answers; don't just curl it once.
+until [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/)" = "200" ]; do sleep 5; done
 
 # 2. Python 3.11 env with civrealm + this server (see SETUP.md for the setuptools<81 fix)
 uv venv --python 3.11 .venv
@@ -288,7 +295,7 @@ so from a clean clone, two commands and nothing else:
 
 ```bash
 pip install --no-deps -e . && pip install pytest
-pytest                                          # 15 tests
+pytest                                          # 16 tests
 ```
 
 That is exactly what CI runs (`.github/workflows/tests.yml`, Python 3.10 and 3.11). Each suite is

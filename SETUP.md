@@ -105,7 +105,11 @@ Verify it is serving (the entrypoint starts tomcat/proxy/civserver in the backgr
 
 ```bash
 docker ps                          # shows: freeciv-web ... 0.0.0.0:8080->80/tcp
-curl -sS -o /dev/null -w "%{http_code}\n" http://localhost:8080/   # -> 200
+
+# It answers only after ~20-40s under emulation; a single curl right after `docker run`
+# returns 000, not 200. Wait for it rather than concluding the container is broken:
+until [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/)" = "200" ]; do sleep 5; done
+echo ready
 ```
 
 ## 4. Smoke-test CivRealm itself
@@ -154,7 +158,7 @@ These need none of the setup above — not even CivRealm:
 
 ```bash
 pip install --no-deps -e . && pip install pytest
-pytest        # 15 tests
+pytest        # 16 tests
 ```
 
 ### Wiring into an MCP client (e.g. Claude Desktop / Claude Code)
