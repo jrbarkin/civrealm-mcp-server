@@ -242,7 +242,8 @@ export ANTHROPIC_API_KEY=sk-ant-...            # read from the environment; neve
 ```
 
 Needs the `anthropic` SDK (`uv pip install --python .venv anthropic`); it is imported lazily, so
-the other two backends do not require it. This backend reports no per-turn cost — `summary.json`'s
-`total_cost_usd` will read 0 on it, with token counts in the transcript instead. There is no
-committed run for it; see README for exactly what was verified.
+the other two backends do not require it. This backend reports no cost in dollars —
+`summary.json`'s `total_cost_usd` reads 0 on it — but does record real usage:
+`input_tokens`/`output_tokens` per turn in `metrics.jsonl` and `total_input_tokens` /
+`total_output_tokens` in `summary.json`. Multiply those by the current rate to get the spend.
 

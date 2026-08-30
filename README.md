@@ -182,9 +182,12 @@ Contestants are selected with flags, not code changes:
 .venv/bin/python -m playloop.loop --mode freeform --max-turns 50          # the unconstrained baseline
 ```
 
-`--backend api` reads `ANTHROPIC_API_KEY` from the environment and reports no per-turn cost, so a
-run's `total_cost_usd` reads 0 on it — token counts go to the transcript instead, rather than put
-a dollar figure in `summary.json` that no committed artifact backs.
+`--backend api` reads `ANTHROPIC_API_KEY` from the environment and reports no per-turn cost in
+dollars, so a run's `total_cost_usd` reads 0 on it. What it does record is the usage the API
+returns: `input_tokens`/`output_tokens` per turn in `metrics.jsonl`, summed into
+`summary.json`'s `total_input_tokens`/`total_output_tokens`. Multiply by the rate on the day —
+the price is not a property of the run, and baking one in would put a number in the output that
+no committed artifact backs.
 
 Run outputs land in `playloop/runs/<timestamp>/` (or `--out-dir`). `playloop/runs/` is gitignored
 apart from the eight directories committed as evidence: `main`, `sonnet-baseline`, `sonnet-fixed`,

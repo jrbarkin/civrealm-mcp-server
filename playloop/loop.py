@@ -130,7 +130,8 @@ def resolve_choices(contestant, menu, menu_text: str, max_retries: int = 2,
     res = contestant.choose_constrained(menu_text, schema=schema)
     choices = dict(res.choices or {})
     meta = {"plan": res.plan, "error": res.error, "ms": res.duration_ms or 0,
-            "cost": res.cost_usd or 0, "retries": 0}
+            "cost": res.cost_usd or 0, "retries": 0,
+            "in_tok": res.input_tokens or 0, "out_tok": res.output_tokens or 0}
     valid_actors = list(menu.index.keys())
     for _ in range(max_retries):
         bad = invalid_selections(menu, choices)
@@ -140,6 +141,8 @@ def resolve_choices(contestant, menu, menu_text: str, max_retries: int = 2,
         r = contestant.choose_constrained(build_feedback(menu_text, bad, valid_actors), schema=schema)
         meta["ms"] += r.duration_ms or 0
         meta["cost"] += r.cost_usd or 0
+        meta["in_tok"] += r.input_tokens or 0
+        meta["out_tok"] += r.output_tokens or 0
         if r.error:
             meta["error"] = r.error
         if not r.choices:
@@ -304,7 +307,9 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
                 choice = contestant.choose(state_text)
                 ap = apply_freeform(game, choice)
                 meta = {"plan": choice.plan, "error": choice.error,
-                        "ms": choice.duration_ms, "cost": choice.cost_usd, "retries": 0}
+                        "ms": choice.duration_ms, "cost": choice.cost_usd, "retries": 0,
+                        "in_tok": choice.input_tokens or 0,
+                        "out_tok": choice.output_tokens or 0}
 
             run_error = ap["run_error"]
             if not game.done and run_error is None:
@@ -331,6 +336,7 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
                 "applied_families": dict(ap["families"]),
                 "plan": meta["plan"], "subagent_error": meta["error"], "retries": meta["retries"],
                 "subagent_ms": meta["ms"], "subagent_cost_usd": meta["cost"],
+                "input_tokens": meta["in_tok"], "output_tokens": meta["out_tok"],
                 "reward": game.reward, "terminated": game.terminated, "truncated": game.truncated,
             }
             metrics.append(row)
@@ -346,7 +352,8 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
             transcript.append({
                 "turn": turn, "mode": mode, "state_text": state_text,
                 "subagent": {"plan": meta["plan"], "error": meta["error"], "retries": meta["retries"],
-                             "ms": meta["ms"], "cost_usd": meta["cost"]},
+                             "ms": meta["ms"], "cost_usd": meta["cost"],
+                             "input_tokens": meta["in_tok"], "output_tokens": meta["out_tok"]},
                 "parsed": ap["parsed"], "per_move": ap["per_move"],
                 "raw_snapshot": raw_snapshot(game) if turn == first_turn else None,
             })
@@ -399,6 +406,11 @@ def play(max_turns: int, client_port: int, username: str, model: str, out_dir: s
                      "note": "higher primary at cap wins; ties broken in tiebreak order"},
         "final_result": final_result,
         "total_cost_usd": round(sum(r["subagent_cost_usd"] or 0 for r in metrics), 4),
+        # Raw usage, for backends that report it (--backend api). Dollars are deliberately NOT
+        # derived here: the price is not a property of this run, so multiply these by the rate
+        # on the day instead of baking a number no artifact backs.
+        "total_input_tokens": sum(r.get("input_tokens") or 0 for r in metrics),
+        "total_output_tokens": sum(r.get("output_tokens") or 0 for r in metrics),
     }
 
     with open(transcript_path, "w") as f:

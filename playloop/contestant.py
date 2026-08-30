@@ -86,6 +86,8 @@ class ChoiceResult:
     error: str | None = None
     duration_ms: int | None = None
     cost_usd: float | None = None
+    input_tokens: int | None = None    # backends that report usage (api); None elsewhere
+    output_tokens: int | None = None
 
 
 def _extract_json_object(text: str) -> dict | None:
@@ -322,10 +324,12 @@ class AnthropicSDKContestant:
     committed runs were produced on. Use `--backend api` when the decoder-level guarantee is
     the point.
 
-    Cost is NOT reported (ChoiceResult.cost_usd stays None, so a run's `total_cost_usd` reads 0
-    on this backend); token usage is recorded in the transcript's `raw` field instead, because
-    turning tokens into dollars would put a number in the output that no committed artifact
-    backs."""
+    Cost in dollars is NOT reported (ChoiceResult.cost_usd stays None, so a run's
+    `total_cost_usd` reads 0 on this backend) — a per-token price would be a number in the output
+    that no committed artifact backs, and prices change. What IS recorded is the raw usage the API
+    returns: `input_tokens`/`output_tokens` per call, summed per turn into metrics.jsonl and over
+    the run into summary.json's `total_input_tokens`/`total_output_tokens`. Multiply those by
+    whatever the price is on the day to get the cost."""
 
     def __init__(self, model: str = "claude-opus-4-8", max_tokens: int = 2048,
                  timeout: int = 300):
@@ -353,7 +357,7 @@ class AnthropicSDKContestant:
         return {**schema, "required": list(schema.get("properties") or {})}
 
     def _message(self, system_prompt: str, user_prompt: str, schema=None):
-        """One Messages API call. Returns (parsed|None, error|None, raw, ms)."""
+        """One Messages API call. Returns (parsed|None, error|None, raw, ms, usage)."""
         import time
         kwargs = {
             "model": self.model,
@@ -368,33 +372,38 @@ class AnthropicSDKContestant:
         try:
             resp = self._get_client().messages.create(**kwargs)
         except Exception as e:
-            return None, f"anthropic api failed: {e!r}", "", int((time.time() - t) * 1000)
+            return None, f"anthropic api failed: {e!r}", "", int((time.time() - t) * 1000), (0, 0)
         ms = int((time.time() - t) * 1000)
-        usage = getattr(resp, "usage", None)
-        raw = (f"[usage in={getattr(usage, 'input_tokens', None)} "
-               f"out={getattr(usage, 'output_tokens', None)} stop={resp.stop_reason}] ")
+        u = getattr(resp, "usage", None)
+        usage = (getattr(u, "input_tokens", 0) or 0, getattr(u, "output_tokens", 0) or 0)
+        raw = f"[usage in={usage[0]} out={usage[1]} stop={resp.stop_reason}] "
         text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
         raw += text[:1000]
         if resp.stop_reason == "refusal":
-            return None, "anthropic api: refusal (schema not guaranteed)", raw, ms
+            return None, "anthropic api: refusal (schema not guaranteed)", raw, ms, usage
         parsed = _extract_json_object(text)
         if parsed is None:
-            return None, "anthropic api: no JSON parsed", raw, ms
-        return parsed, None, raw, ms
+            return None, "anthropic api: no JSON parsed", raw, ms, usage
+        return parsed, None, raw, ms, usage
 
     def choose(self, state_text: str) -> ChoiceResult:
-        parsed, error, raw, ms = self._message(SYSTEM_PROMPT, state_text)
+        parsed, error, raw, ms, usage = self._message(SYSTEM_PROMPT, state_text)
         if parsed is None:
-            return ChoiceResult(moves=[], error=error, raw=raw, duration_ms=ms)
+            return ChoiceResult(moves=[], error=error, raw=raw, duration_ms=ms,
+                                input_tokens=usage[0], output_tokens=usage[1])
         return ChoiceResult(moves=_norm_moves(parsed), plan=str(parsed.get("plan", "")),
-                            raw=raw, duration_ms=ms)
+                            raw=raw, duration_ms=ms,
+                            input_tokens=usage[0], output_tokens=usage[1])
 
     def choose_constrained(self, menu_text: str, schema=None) -> ChoiceResult:
-        parsed, error, raw, ms = self._message(CONSTRAINED_SYSTEM_PROMPT, menu_text, schema=schema)
+        parsed, error, raw, ms, usage = self._message(CONSTRAINED_SYSTEM_PROMPT, menu_text,
+                                                      schema=schema)
         if parsed is None:
-            return ChoiceResult(choices={}, error=error, raw=raw, duration_ms=ms)
+            return ChoiceResult(choices={}, error=error, raw=raw, duration_ms=ms,
+                                input_tokens=usage[0], output_tokens=usage[1])
         return ChoiceResult(choices=_norm_choices(parsed), plan=str(parsed.get("plan", "")),
-                            raw=raw, duration_ms=ms)
+                            raw=raw, duration_ms=ms,
+                            input_tokens=usage[0], output_tokens=usage[1])
 
 
 class RandomContestant:
