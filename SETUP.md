@@ -26,8 +26,13 @@ uv --version              # uv 0.11.x
 
 ## 1. Clone CivRealm (for source + console scripts)
 
+The CivRealm checkout and this repo sit side by side in one workspace directory. The rest of this
+guide calls it `$WORKSPACE`; point it wherever you keep your repos. This repo is assumed to be
+cloned at `$WORKSPACE/civrealm-mcp-server`.
+
 ```bash
-cd /Users/jbarkin/Repos
+export WORKSPACE=/path/to/workspace       # e.g. export WORKSPACE="$HOME/Repos"
+mkdir -p "$WORKSPACE" && cd "$WORKSPACE"
 git clone --depth 1 https://github.com/bigai-ai/civrealm.git
 # (optional, for reference) git clone --depth 1 https://github.com/bigai-ai/civrealm-llm-baseline.git
 ```
@@ -38,9 +43,9 @@ CivRealm pins old deps (`selenium==4.9.1`, `tornado==6.3.2`, `gymnasium==0.29.1`
 `ray==2.6.3; python_version<"3.12"`). These resolve cleanly on **3.11** but not on 3.12+/3.14.
 
 ```bash
-cd /Users/jbarkin/Repos/civrealm-mcp-server
+cd "$WORKSPACE/civrealm-mcp-server"
 uv venv --python 3.11 .venv
-uv pip install --python .venv -e /Users/jbarkin/Repos/civrealm    # or: uv pip install civrealm==0.1.2
+uv pip install --python .venv -e "$WORKSPACE/civrealm"    # or: uv pip install civrealm==0.1.2
 ```
 
 ### FIX: `ModuleNotFoundError: No module named 'pkg_resources'`
@@ -126,7 +131,7 @@ shows the *other* player connecting, and both print an identical final `game res
 ## 5. Install and run THIS MCP server
 
 ```bash
-cd /Users/jbarkin/Repos/civrealm-mcp-server
+cd "$WORKSPACE/civrealm-mcp-server"              # re-export WORKSPACE first if this is a fresh shell
 uv pip install --python .venv --no-deps -e .     # deps (civrealm, mcp, setuptools<81) already installed
 
 # Run the stdio server directly (it waits for an MCP client on stdin/stdout):
@@ -134,19 +139,34 @@ uv pip install --python .venv --no-deps -e .     # deps (civrealm, mcp, setuptoo
 #   or:  .venv/bin/python -m civrealm_mcp.server
 ```
 
-### Acceptance test (drives a game purely through MCP tools)
+### Acceptance check (drives a game purely through MCP tools)
+
+Needs the Docker server above. It prints the state at each step; it asserts nothing, which is why
+it is a script rather than a pytest test:
 
 ```bash
-.venv/bin/python tests/acceptance_test.py
+.venv/bin/python scripts/acceptance_check.py
+```
+
+### Offline test suites (no Docker, no model, no network, no API key)
+
+These need none of the setup above — not even CivRealm:
+
+```bash
+pip install --no-deps -e . && pip install pytest
+pytest        # 15 tests
 ```
 
 ### Wiring into an MCP client (e.g. Claude Desktop / Claude Code)
+
+Use the **absolute** path to your own checkout (`echo "$WORKSPACE/civrealm-mcp-server"` prints it).
+MCP client config is plain JSON: it does not expand `~` or `$WORKSPACE`.
 
 ```json
 {
   "mcpServers": {
     "civrealm": {
-      "command": "/Users/jbarkin/Repos/civrealm-mcp-server/.venv/bin/civrealm-mcp-server"
+      "command": "/path/to/civrealm-mcp-server/.venv/bin/civrealm-mcp-server"
     }
   }
 }
@@ -173,8 +193,9 @@ freeciv-web image: civrealm/freeciv-web:latest (digest sha256:4923253876a7, linu
 ## Local-LLM contestant for the play loop (Ollama — cross-platform, zero API usage)
 
 The single-agent play loop's contestant is pluggable: a `claude` subagent (`--backend claude`,
-default) or a small **local model via Ollama** (`--backend local`). Ollama wraps llama.cpp/GGUF,
-so it runs on macOS / Linux / Windows (no API key, no usage).
+default), the Anthropic Messages API (`--backend api`, below), or a small **local model via
+Ollama** (`--backend local`). Ollama wraps llama.cpp/GGUF, so it runs on macOS / Linux / Windows
+(no API key, no usage).
 
 Install Ollama (cross-platform):
 
@@ -191,7 +212,9 @@ ollama serve &                  # if not already running as a service
 ollama pull llama3.2:1b         # Llama-3.2-1B-Instruct, ~1.3 GB GGUF
 ```
 
-Run the play loop against it (constrained mode → illegal actions impossible by construction):
+Run the play loop against it (constrained mode; on this backend the per-turn schema goes into
+Ollama's `format`, so llama.cpp compiles it to a grammar and an out-of-enum option cannot be
+sampled):
 
 ```bash
 .venv/bin/python -m playloop.loop --backend local --model llama3.2:1b --max-turns 50
@@ -205,4 +228,21 @@ on the **llama.cpp/GGML Metal** backend (GPU-accelerated — "offloaded 17/17 la
 GPU-accelerated via Metal here, just not via MLX. Caveat: a 1B is too weak to play CivRealm well
 (it plays *legally* under constrained mode but founds no cities); use a larger local model (7–8B)
 or `--backend claude` for competent play.
+
+## API contestant (`--backend api`) — the decoder-enforced Claude path
+
+`--backend claude` shells out to the `claude` CLI and needs no API key, but the CLI only
+*validates* the per-turn schema and retries. `--backend api` sends the same schema as
+`output_config.format` on the Messages API, where it is compiled and constrains generation, so an
+out-of-enum option cannot be produced at all:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...            # read from the environment; never stored in the tree
+.venv/bin/python -m playloop.loop --backend api --model claude-opus-4-8 --max-turns 50
+```
+
+Needs the `anthropic` SDK (`uv pip install --python .venv anthropic`); it is imported lazily, so
+the other two backends do not require it. This backend reports no per-turn cost — `summary.json`'s
+`total_cost_usd` will read 0 on it, with token counts in the transcript instead. There is no
+committed run for it; see README for exactly what was verified.
 

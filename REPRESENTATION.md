@@ -91,13 +91,17 @@ The action strings never come from the model, so it cannot propose anything ille
   per turn (cost-efficient). Tech's large set is still capped at `ACTION_CAP` with the overflow noted.
 - The loop (`apply_constrained`) resolves each number via the index and applies it, re-checking
   legality as a safety/bug guard. Counters: `applied`, `skipped` (option 0), `bad_index` (number not
-  in that actor's menu), `unknown_actor` (actor key not in the menu), `duplicate`, and `illegal`
-  (legal at menu-build but not at apply — a rare cross-actor staleness; expected ~0).
+  in that actor's menu), `unknown_actor` (actor key not in the menu), `duplicate`, and `stale`
+  (legal at menu-build but not at apply, because an earlier same-turn action moved a stacked unit —
+  a rare cross-actor artifact, counted separately and skipped, not applied).
 
-**Applied illegal actions are 0 by construction.** Any non-zero `illegal` / `bad_index` /
-`unknown_actor` indicates an index or parse bug (or a contestant returning a malformed number),
-not legitimate "illegal play" — those are tracked separately (`selection_errors`) and should be
-driven to ~0.
+**Applied illegal actions are 0 by construction**, so `illegal` is returned as a literal `0` in
+constrained mode rather than measured — the number is only meaningful in free-form mode, where the
+loop really does validate model-authored action strings. `stale` is the honest residual: it is the
+model picking an option it *was* offered, so it is not an illegal proposal. Any non-zero
+`bad_index` / `unknown_actor` indicates an index or parse bug (or a contestant returning a
+malformed number), not legitimate "illegal play" — those are tracked separately
+(`selection_errors`) and should be driven to ~0.
 
 ### Structured-output enforcement + retry feedback
 
@@ -105,13 +109,22 @@ Two layers harden the contestant's reply beyond "valid JSON":
 
 1. **Per-turn JSON Schema** (`menu_to_schema`): one integer property per actor, each constrained to
    an `enum` of that actor's valid option numbers, all actors `required`, `additionalProperties:false`.
-   Passed to a grammar-constrained backend (Ollama `format=<schema>`), this makes it *impossible* to
-   hallucinate an actor, pick an out-of-range number, or omit an actor. Measured effect on a weak 1B
-   (`llama3.2:1b`): actors-acted-on/turn 1→7, hallucinated actors 50→0, retries 100→0 (illegal stays
-   0). It does **not** fix *judgment* — a 1B still makes legal-but-poor choices.
-2. **Retry feedback** (`invalid_selections`/`build_feedback`/`resolve_choices`): for contestants that
-   ignore the schema (e.g. the `claude` CLI path), an invalid selection is returned to the model with
-   the acceptable options enumerated, and retried (merging only the corrected actors).
+   Passed to a **grammar-constrained** backend — Ollama's `format=<schema>`, or the Anthropic
+   Messages API's `output_config.format` — this makes it *impossible* to hallucinate an actor, pick
+   an out-of-range number, or omit an actor. Measured effect on a weak 1B (`llama3.2:1b`):
+   actors-acted-on/turn 1→7, hallucinated actors 50→0, retries 100→0 (illegal stays 0). It does
+   **not** fix *judgment* — a 1B still makes legal-but-poor choices.
+
+   The same schema reaches the `claude` CLI backend through `--json-schema`, but that is a weaker
+   mechanism: the CLI exposes a `StructuredOutput` tool, **validates the model's answer and retries**
+   rather than constraining generation. An out-of-enum value is emitted and then rejected — and if
+   the model never produces a conforming one, the CLI returns `structured_output: null` and the turn
+   yields nothing. Worth having anyway: on one real 8-actor menu (claude-haiku-4-5, 3 runs each),
+   without the schema 2 of 3 replies silently omitted an actor; with it, 3 of 3 were complete.
+2. **Retry feedback** (`invalid_selections`/`build_feedback`/`resolve_choices`): the backstop for
+   every backend — for one that ignores the schema, and for the CLI path's null result. An invalid
+   selection is returned to the model with the acceptable options enumerated, and retried (merging
+   only the corrected actors).
 
 ## Raw → shaped is debuggable
 

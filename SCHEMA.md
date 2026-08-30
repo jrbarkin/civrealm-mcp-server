@@ -1,10 +1,11 @@
 # CivRealm Environment Schema
 
 This document records the **observation structure**, **action format**, **turn mechanics**, and
-**game-end signalling** of the CivRealm Gymnasium environment, as verified against the live source at
-`/Users/jbarkin/Repos/civrealm` (package `civrealm==0.1.2`) and against real data: the captured
-observation pickle in `civrealm-llm-baseline/observations_info.txt` (unpickled and introspected) and
-a live single-player run (`test_civrealm`) against the Dockerized freeciv-web server.
+**game-end signalling** of the CivRealm Gymnasium environment, as verified against the live source
+in a local CivRealm checkout (`/path/to/civrealm`, package `civrealm==0.1.2`) and against real
+data: the captured observation pickle in `civrealm-llm-baseline/observations_info.txt` (unpickled
+and introspected) and a live single-player run (`test_civrealm`) against the Dockerized
+freeciv-web server.
 
 Citations use `file:line` relative to `civrealm/src/civrealm/...`.
 
@@ -151,11 +152,22 @@ Two special actions are handled in `civ_controller.perform_action` (`civ_control
 | `'pass'` | no-op debug message (no game effect) |
 
 `ctrl_type` ∈ `{unit, city, player, dipl, tech, gov}` (the other controllers expose no real actions).
+This is the one closed set in the tuple, so the MCP server types it `Literal[...]` and FastMCP
+publishes it as an `enum` in the tool's `inputSchema` — see the note under the tool table below.
 `actor_id` depends on `ctrl_type`: integer `unit_id`/`city_id` for unit/city; the string `'cur_player'`
 for tech; `player_id` for gov; the counterpart `player_id` for dipl.
-`action_name` is the `Action.action_key` string, e.g. `build_city, fortify, sentry, build_road,
-goto_0`…`goto_7` (one per of 8 directions), `produce, city_work, city_buy_production, research_tech,
-set_tech_goal, change_gov, increase_sci, start_negotiation`.
+`action_name` is the `Action.action_key` string. Some keys are fixed — `build_city, fortify,
+keep_activity, cancel_order, build_road, irrigation, city_buy_production, goto_0`…`goto_7` (one
+per of the 8 directions). Most are **parameterised and carry their target inside the key**:
+`produce_Warriors`, `city_work_13_-2_-1`, `city_unwork_9_-2_0`, `research_tech_Alphabet_2`,
+`set_tech_goal_Astronomy_4`, `change_gov_Monarchy`, `add_clause_Alliance_1_0_2`. Never construct
+one — copy it verbatim from `info['available_actions']`, which is the only authority on what is
+legal this step.
+
+Every key above appears in a committed `raw_snapshot` (`playloop/runs/*/transcript.json`). Those
+snapshots capture **turn 1 only**, so absence from them is not evidence a key is unreal — `sentry`,
+for instance, is handled in `playloop/representation.HOLD_HINTS` but never showed up as legal on a
+first turn.
 
 ### Legal actions are in `info['available_actions']`, NOT in the observation
 
@@ -243,6 +255,19 @@ Important properties:
 | `get_status` | `info['turn']`, last `reward`, `terminated`, `truncated`, `get_game_results()` winner/scores |
 | `close_game` | `env.close()` |
 
+**How much of the tuple the tool schema can constrain.** Only `ctrl_type`: it is closed (the six
+above), so `take_action` and `get_legal_actions` type it `Literal["unit","city","player","dipl",
+"tech","gov"]`, which FastMCP renders as a JSON Schema `enum`, so a client cannot even propose a
+seventh. `actor_id` and `action_name` are turn-dependent — the legal set is rebuilt every step from
+`info['available_actions']` — so they cannot honestly be enumerated in a static tool schema, and are
+instead validated *after* the call: `take_action` checks legality first and, on a miss, returns
+`{"error": "illegal or unavailable action", "valid_actions_for_actor": [...]}` without stepping the
+env. Over MCP, then, an illegal action is **rejected**. That is a weaker guarantee than the play
+loop's constrained mode, where the per-turn schema built from this same mask
+(`playloop/representation.menu_to_schema`) makes an out-of-enum choice **unrepresentable** on a
+decoder-constrained backend. Both are documented rather than conflated; see the backend table in
+README.
+
 Note on JSON serialization: `map` values are numpy arrays and several leaf values are numpy scalars /
-`BitVector`; the MCP server must convert these to JSON-native types before returning (see the server's
-`_jsonable()`).
+`BitVector`; the MCP server must convert these to JSON-native types before returning (see
+`jsonable()` in `src/civrealm_mcp/core.py`, shared by the server and the play loop).

@@ -1,365 +1,333 @@
 # STATUS
 
-Exploratory first pass: a thin MCP server exposing **one** CivRealm (Freeciv) environment.
-All four phases of the task were completed and verified by **running** them on macOS (Apple
-Silicon, arm64) against the Dockerized freeciv-web server. Output was pasted at each gate.
+Two pieces that share one env-access layer:
 
-_Last verified: 2026-06-14._
+1. **`src/civrealm_mcp/`** — a minimal MCP server exposing **one** CivRealm (Freeciv) Gymnasium
+   env as seven stdio tools, so an external MCP client can drive a game by hand. No LLM inside.
+2. **`playloop/`** — a headless self-play harness (shape state → offer a constrained menu → ask a
+   contestant → apply the legal choices → end turn), plus a two-side orchestrator and a win rule.
 
----
+**Boundary worth remembering:** `playloop/` does **not** go over MCP. It imports
+`civrealm_mcp.core` and drives the env in-process; nothing under `playloop/` imports `mcp`.
+`core.CivRealmGame` is the single env-access layer — the MCP server is a thin async wrapper over
+it, the play loop is a synchronous driver on top of it. The MCP server exists so an *external*
+agent can play by hand; the play loop exists to run many turns headlessly with no JSON-RPC in the
+way. `playloop/` is also where most of the Python lives; the server itself is 245 + 181 lines.
 
-## What works (verified, with pasted evidence)
+Last full verification (Docker + live games): **2026-06-15**, macOS on Apple Silicon (arm64),
+against the Dockerized freeciv-web server. The offline test suites were re-run **2026-08-29** and
+are still green (`pytest`, 15 tests, no Docker/model/network — CI runs the same on 3.10 + 3.11).
 
-### Phase 0 — Environment
-- **Python env**: Python 3.11 venv (via `uv`) with `civrealm==0.1.2` and pinned deps
-  (`gymnasium 0.29.1`, `selenium 4.9.1`, `tornado 6.3.2`, `ray 2.6.3`, `numpy 2.4.6`).
-  Fix required: `setuptools<81` (ray imports the removed `pkg_resources`).
-- **Docker server**: `civrealm/freeciv-web:latest` (amd64) pulled & retagged; container runs
-  under emulation on arm64. `curl http://localhost:8080/` → **HTTP 200**.
-- **0.4 single-player smoke test** (`test_civrealm --max_turns=2`): **PASS** —
-  `Reset with port: 6001`, units acting (`('unit', 101, 'build_city')`, `goto_*`), turn
-  advance, `Truncated: True` at turn 3, and a 4-player `game results` dict.
-- **0.5 two-player smoke test** (`--minp=2 --username=myagent` + `--username=myagent1`, same
-  `client_port=6001`): **PASS, provably one game** — each client's log shows the *other*
-  player connecting (`'myagent1 has connected ... (player Myagent1)'` and vice-versa), both on
-  `challenge_6001_*` with identical `mapseed 681897 / gameseed 950276`, and **both printed an
-  identical final 4-player `game results`** (impossible across two separate games).
-
-### Phase 1 — Schema
-- **[SCHEMA.md](SCHEMA.md)** documents the observation dict (11 top-level keys: game, rules,
-  map, player, city, tech, unit, options, dipl, gov, client), the `info` dict
-  (`turn`, `available_actions`, optional `llm_info`), the action 3-tuple
-  `(ctrl_type, actor_id, action_name)` with `None`=end-turn, and reward/terminated/truncated/
-  winner signalling. Derived from source + a real **unpickled** observation + the live runs.
-
-### Phase 2 — MCP server
-- **[src/civrealm_mcp/server.py](src/civrealm_mcp/server.py)** (official `mcp` SDK / FastMCP,
-  stdio) owns ONE `FreecivBaseEnv` and exposes the 7 required tools: `start_game`,
-  `get_observation`, `get_legal_actions`, `take_action`, `end_turn`, `get_status`,
-  `close_game`. No LLM in the server (model-agnostic). Observations/actions serialized to JSON.
-
-### Phase 3 — Acceptance test
-- **[tests/acceptance_test.py](tests/acceptance_test.py)** spawns the server over stdio (a real
-  MCP client) and runs `start_game → get_observation → get_legal_actions → take_action →
-  end_turn → get_status → close_game` with **no GUI / no direct civrealm calls**. **PASS** —
-  e.g. `take_action(unit, 104, build_city)` then `end_turn` advanced turn 1→2 with
-  `last_reward: 1` (score 0→1), and `Reset with port: 6001` correctly went to **stderr**
-  (proving the JSON-RPC stdout stays clean).
-
-## Bugs found & fixed during bring-up (TDD: failing run → fix → passing run)
-1. **`pkg_resources` missing** (ray 2.6.3 on setuptools≥81) → pin `setuptools<81`.
-2. **Apple-Silicon port conflict**: default port map publishes `7000-7009`, but macOS Control
-   Center (AirPlay Receiver) owns port 7000 → publish only `8080:80` (the only host port the
-   client needs). The acceptance test connecting successfully is the regression check.
-3. **`This event loop is already running`**: CivRealm drives a tornado IOLoop inside
-   `reset()/step()`, which collides with FastMCP's asyncio loop → offload all env calls to a
-   single dedicated worker thread. The acceptance test (which failed on this, then passed after
-   the fix) is the regression test.
-4. **`BeginTurnTimeout` in the server**: don't override `multiplayer_game`; raise
-   `begin_turn_timeout` to 120s for the emulated server. Fixed; acceptance test passes.
-
-## What does NOT work / known limitations
-- **Emulation is slow**: the amd64 image runs under qemu/Rosetta on arm64; `reset()` takes
-  ~10-30s and a turn a few seconds. No arm64 image is published.
-- **Stale game on a port**: if `reset()` crashes mid-connection, the in-container civserver for
-  that `client_port` can get stuck and the next `start_game` may `BeginTurnTimeout`. Workaround:
-  restart the container (`docker stop freeciv-web`), or use a different `client_port`
-  (6001 or 6300-6331). The server does not yet auto-recover stuck ports.
-- **Large observations**: `get_observation()` with no `keys` includes the `map` arrays
-  (e.g. a `(X, Y, 52)` unit array → ~200k ints). Use `keys=["unit","player","city",...]`.
-- **Winner detection**: `terminated` covers defeat / game-over flags; the per-player `winner`
-  appears in `get_status` only once the server sends the endgame packet (true game end).
-  Mid-game victory-condition termination for *your* player is not implemented upstream
-  (`# FIXME: check victory conditions.` in civrealm).
-- **Single client, single env**: the server owns one env and serializes tool calls on one
-  worker thread (correct for one driver; not built for concurrent clients).
-- **No `llm_info`**: the server wraps `FreecivBase-v0` (raw obs). The human-readable
-  `info['llm_info']` from `FreecivLLM-v0`/`LLMWrapper` is not exposed yet.
-
-## Recommended next step
-Build the **two-agent orchestrator** (out of scope here, but the foundation is proven): run two
-MCP-driven clients against the **same** `client_port` with `minp=2` and distinct usernames
-(0.5 showed two clients share one game), and an external loop that alternates each LLM's turn
-via the existing tools. Concretely:
-1. Add a `start_game(multiplayer=True, minp=2, username=...)` path (or a small `join_game`
-   variant) so two server instances can join one game on one port.
-2. Add an optional `llm_info` surface (wrap `FreecivLLM-v0`) for cheaper natural-language
-   observations.
-3. Harden lifecycle: auto-pick a free `client_port`, detect/restart stuck ports, and optionally
-   manage the Docker container from the server.
-4. Only then layer on turn arbitration, then rating/bracket — none of which belong in this
-   single-env MCP server.
-
-## How to reproduce
-See **[SETUP.md](SETUP.md)** for exact commands. Short version: start the Docker server
-(`docker run -d --name freeciv-web --rm -p 8080:80 freeciv/freeciv-web:latest`), then
-`.venv/bin/python tests/acceptance_test.py`.
+**Which runs a cloner can actually open:** `playloop/runs/` is gitignored apart from eight
+committed directories — `main`, `sonnet-baseline`, `sonnet-fixed`, `constrained-smoke2`,
+`local-llama1b-50turn`, `local-llama1b-schema`, `orch-test1`, `orch-test2`. Run names appearing
+below that are *not* in that list (`constrained-smoke`, `local-smoke`, `probe-qwen-smoke`,
+`probe-qwen-smoke2`, `constrained-haiku50`, `constrained-sonnet50`) exist only on the machine that
+produced them; they are cited here as history, not as evidence you can check.
 
 ---
 
-# Update (2026-06-15): Single-agent play loop — can one LLM actually play?
+## The result worth keeping
 
-A second task: a headless loop that plays ONE game vs the built-in AI by looping
-observe → shape state + legal actions → ask an LLM for moves → apply the legal ones → end turn,
-until a turn cap. This is a **viability probe** (coherence, not winning).
+**Per-turn JSON-Schema-constrained selection takes the illegal-action rate from 16.6% to 0**, and
+holds it at 0 for every contestant tried — Sonnet, a local 1B, a local 4B, and a seeded random
+picker. Free-form prompting leaks illegal proposals at a rate that is *model-specific* (Opus 4.8
+16.6%, Sonnet 4.6 1.3% on the identical representation); constraining selection to a numbered menu
+whose enum is built from `info['available_actions']` removes the failure mode entirely.
 
-## What was built
-- **Shared engine** `src/civrealm_mcp/core.py` (`CivRealmGame`) — the MCP server was refactored
-  to drive through it, so the play loop and the MCP server use **one env-access layer**. (The MCP
-  acceptance test was re-run after the refactor — still passes, no regression.)
-- **Shaping layer** `playloop/representation.py` + **[REPRESENTATION.md](REPRESENTATION.md)** +
-  a real `EXAMPLE_SHAPED_STATE.txt`. Condenses the raw observation into a compact strategic
-  summary + your cities/units + per-actor **exact legal actions** (cryptic `goto_*` keys annotated
-  with compass directions). Raw→shaped stays debuggable (full raw snapshot saved for turn 1).
-- **Contestant** `playloop/contestant.py` — one configurable slot. Instead of the paid API it
-  **spawns an isolated `claude` subagent per turn** (`claude -p ... --output-format json`,
-  tools disabled), using this environment's auth. Probe model: **Claude Opus 4.8** (strong, so a
-  flail implicates our representation, not the model).
-- **Loop + metrics + transcript** `playloop/loop.py` → `playloop/runs/<ts>/{metrics.jsonl,
-  transcript.json,summary.json}`.
+Said precisely, because the strength of the guarantee is backend-specific (README has the table):
 
-## The real run (50 turns, Opus 4.8, `playloop/runs/main/`)
-Acceptance: **complete the cap without crashing**, **illegal-action rate < 15%**, **demonstrably
-playing**.
+- **On every backend**, the contestant returns option *numbers* that the loop resolves through the
+  menu index, so an action the env never offered cannot be executed. `illegal: 0` is structural.
+- **On `--backend local` (Ollama) and `--backend api` (Messages API)**, the schema additionally
+  constrains the decoder, so an out-of-enum option cannot be *emitted*: unrepresentable rather
+  than merely unlikely, in the strict sense.
+- **On the default `--backend claude`**, the `claude` CLI validates the answer against the same
+  schema and retries. There, an illegal choice is *rejected*, not unrepresentable — and every
+  committed Claude run predates even that, having discarded the schema entirely.
 
-| metric | result |
-|---|---|
-| turns completed | **50 / 50, no crash** ✅ |
-| score | **0 → 16** |
-| cities founded | **3** (turns 1, 4, 23) |
-| units | 5 → 13 |
-| demonstrably playing | 193 unit moves, 96 terrain improvements, 67 city-production actions, 48 research actions, 3 cities, 3 attacks, 2 huts entered ✅ |
-| illegal-action rate | **16.6% overall** (100/603), mean per-turn **14.5%** — borderline vs <15% |
-| cost | ~$4.77 (50 subagent calls) |
+The first bullet is what all the committed runs demonstrate, and it is the defensible claim.
 
-**Honest read — is it playing or flailing? Playing, clearly.** It expands, improves terrain,
-manages city production, and steers research across all 50 turns; the early game is near-flawless
-(turns 1–13: ~0 illegal). It does *not* no-op or end turns immediately.
+## Current state
 
-## The single biggest obstacle (and the design point)
-**92 of 100 illegal proposals are one confusion:** the model reaches for `fortify` to "hold" a
-unit, but for units mid-activity the legal hold action is `keep_activity`/`cancel_order`, not
-`fortify`. (6 were blocked-direction `goto`s; 2 misc.) It worsens late-game purely because there
-are more idle units to mishandle — the documented "control many units" difficulty, narrowed to
-one fixable semantic gap. **0 illegal proposals targeted a non-actionable actor** — the model is
-not commanding dead units.
-
-Important framing: **illegal proposals are never executed** — the loop validates every move
-against `info['available_actions']` and only applies legal ones, so gameplay is always valid. The
-16.6% is a *diagnostic of how faithfully the model copies from the presented valid-options list*,
-not bad moves hitting the board. The choice was left unconstrained on purpose so the probe could
-*find* representation gaps like this; a production head-to-head would instead **constrain
-selection to the presented options** (enum/numbered choice → illegal rate structurally 0).
-
-Two concrete fixes, both validated against the captured data (`all 92 fortify-illegals had
-keep_activity listed`):
-1. **Map the hold action**: alias `fortify → keep_activity` when fortify isn't legal (and label
-   the hold option clearly in the representation). Applying this to the run's data resolves 92/100
-   → **projected illegal rate 1.3%** (8/603), well under target.
-2. **Constrain selection** to the offered keys (the env layer already supports this via
-   `available_actions`).
-
-Neither was applied here (the task says stop and report after the run); both are one-evening changes.
-
-## Deliverables (this task)
-`src/civrealm_mcp/core.py`, `playloop/{representation,contestant,loop}.py`,
-`REPRESENTATION.md`, `EXAMPLE_SHAPED_STATE.txt`, and the real run under `playloop/runs/main/`
-(`metrics.jsonl` + `transcript.json` + `summary.json`).
-
-## Reproduce
-Docker server up (see SETUP.md), then:
-`.venv/bin/python -m playloop.loop --max-turns 50` (or a smaller cap to validate quickly).
-
----
-
-## Follow-up (2026-06-16): hold-action fix + cheaper-model A/B
-
-Applied the representation fix and re-tested with **Claude Sonnet 4.6** (the contestant is a
-`--model` flag). The fix is principled, not leniency: `representation.py` now annotates the
-hold/idle actions (`keep_activity [hold: stay put]`, `fortify [hold: dig in]`, …) so the listed
-hold action is unambiguous, and the contestant prompt steers to "use the HOLD action in THAT
-unit's list; don't use fortify unless it's listed." No silent aliasing was added, so the
-illegal-action rate still honestly measures adherence to the presented options.
-
-A/B (illegal-action rate; all runs completed the cap, no crash, demonstrably playing):
-
-| run | turns | illegal rate | fortify-illegals | score | cities |
-|---|---|---|---|---|---|
-| Opus 4.8, original representation | 50 | **16.6%** | 92 | 16 | 3 |
-| Sonnet 4.6, original representation | 30 | **1.3%** | 0 | 10 | 2 |
-| Sonnet 4.6, **fixed** representation | 30 | **0.0%** | 0 | 10 | 2 |
-
-**Two findings:**
-1. **The illegal-action problem was model-specific, not a representation flaw.** Sonnet 4.6 made
-   *zero* `fortify` mistakes on the *original* representation (1.3% overall, all minor) — the
-   16.6% was Opus 4.8 idiosyncratically defaulting to `fortify`. Same representation, very
-   different adherence. This matters for the eventual head-to-head: given identical valid-options,
-   contestants differ in how faithfully they pick from the list, so the production design should
-   constrain selection (enum/numbered choice) and/or tune per model — not assume one prompt fits all.
-2. **The hold-action fix helps and doesn't regress.** Sonnet went 1.3% → **0.0%** with the fix,
-   still founding cities, moving units (138), and improving terrain (52) over 30 turns.
-
-Per the "no Opus for testing" constraint this A/B used Sonnet; the projected Opus improvement
-(92/100 illegals resolved → ~1.3%) remains a data-derived projection, not a live Opus re-run.
-
-Runs: `playloop/runs/sonnet-baseline/` and `playloop/runs/sonnet-fixed/`.
-Reproduce a cheap run: `.venv/bin/python -m playloop.loop --model claude-sonnet-4-6 --max-turns 30`.
-
----
-
-# Update (2026-06-15): Constrained selection + win rule + retry feedback + local-LLM contestant
-
-Preconditions for a fair head-to-head (no orchestration yet).
-
-## Part A — constrained action selection (illegal action impossible by construction)
-- `representation.build_choice_menu()/render_menu()`: a per-actor NUMBERED menu of that actor's
-  legal actions (keyed `unit:104`/`city:110`/`tech:cur_player`/`gov:0`; option `0` = skip). The
-  contestant returns an option NUMBER per actor, so the action strings never come from the model.
-  Grouped per actor (not a flat 300-item list); one model call per turn.
-- `loop.py --mode constrained` (default): `apply_constrained` resolves numbers via the menu index
-  and applies only legal actions. Counters: applied / skipped / bad_index / unknown_actor /
-  duplicate / `stale` (legal at menu-build but changed by an earlier same-turn action under stacked
-  units — benign, skipped). **Illegal applied actions are 0 by construction.**
-- Verified (Sonnet 4.6 constrained smoke, `playloop/runs/constrained-smoke2/`): illegal_action_rate
-  **0.0**, selection_error_total **0**, all attempted choices applied; `final_result` read at the cap.
-  See `EXAMPLE_CONSTRAINED_MENU.txt` for a real per-actor menu. (A full 50-turn paid run was
-  deprioritized to conserve usage — use the local-LLM path below.)
-
-## Retry-feedback loop ("an illegal attempt should throw + remind the agent of the options")
-- When a selection is invalid (bad option number / unknown actor key), the loop returns an error
-  that **enumerates the acceptable options** for those actors and retries, merging only the
-  corrected actors, up to `max_retries`. `invalid_selections()` and `build_feedback()` are pure;
-  `resolve_choices()` drives it.
-- Verified by `playloop/test_retry.py` (mock contestant, **zero usage**): bad index + unknown actor
-  are fed back with valid options, the correction is merged, valid selections preserved, an
-  uncorrected one stays flagged, happy path does no retries. **12/12 pass.**
-
-## Part B — score-based win rule
-- `winrule.get_final_result(game)`: end-of-game metrics (score/cities/techs/population/units) read
-  from the observation at the cap. PURE `decide_winner(A, B)`: higher primary (score) wins; tiebreak
-  `cities → techs → population → units`; cap + primary metric configurable.
-- `playloop/test_winrule.py`: **8/8 pass** (A>B, B>A, each tiebreak level, full tie, configurable
-  primary, missing keys default 0). The loop logs `final_result` + `win_rule` at game end.
-
-## Local-LLM contestant (cross-platform, zero API usage)
-- `contestant.OllamaContestant`: a small local model via **Ollama** (llama.cpp/GGUF core →
-  macOS/Linux/Windows), default **`llama3.2:1b`** (Llama-3.2-1B-Instruct), using Ollama's
-  `format="json"`. Selected with `--backend local`. The contestant slot is pluggable:
-  `claude` subagent | local Ollama.
-- **Status: coded + import-verified; the local game has NOT been run here** — the Ollama server came
-  up (v0.30.8) but the model pull was interrupted and Ollama was then uninstalled (to be set up on
-  your side). Run it after installing Ollama (see SETUP.md):
-  `ollama pull llama3.2:1b` then `.venv/bin/python -m playloop.loop --backend local --max-turns 50`.
-  Constrained mode keeps illegal=0 regardless of model; the retry loop recovers a 1B's malformed
-  selections.
-
-## Verified vs pending
-- **Verified** (no/low usage): win-rule tests 8/8, retry tests 12/12, constrained smoke
-  illegal_rate 0.0, MCP acceptance still green after the `core.py` refactor.
-- **Pending (your machine):** the local 50-turn game with Ollama + `llama3.2:1b` (command above);
-  optionally a full 50-turn paid constrained run for a paid-model baseline.
-
----
-
-# Update (2026-06-15b): local 1B run completed + Ollama/MLX findings
-
-Ran the local game (zero API usage) after installing Ollama and pulling `llama3.2:1b`.
-
-## Result — harness verified; the 1B is the bottleneck
-`playloop/runs/local-llama1b-50turn/` (constrained mode, Ollama `llama3.2:1b`, Metal/M3):
-- **50/50 turns, no crash; illegal_action_rate 0.0 across every turn; total_cost_usd 0.**
-  → Part A's "illegal impossible by construction" holds end-to-end with a real, weak model.
-- `final_result` read at the cap (Part B); the retry-feedback loop fired hard (**100 retries**).
-- **But the 1B plays incompetently:** founded 0 cities, 0 unit moves, score stayed 0, acting on only
-  ~1 of ~8 actors/turn. Concretely (turn 1): its plan was literally "build_city", yet it returned
-  `{"unit:102": 2, "city:110": 2}` — option 2 for unit:102 is `plant` (not build_city), and
-  `city:110` doesn't exist (0 cities that turn → a hallucinated actor). The retry fed back the valid
-  options each turn, but the 1B repeated the same mistakes.
-- **Read:** constrained menus + retry guarantee *legal* play and the harness never breaks, but a 1B
-  can't faithfully read the menu (invents actors, mis-maps intent→option number) — so it's legal but
-  not competent. A capable contestant is needed for real play: a larger local model (7–8B) or the
-  `claude` backend (cf. the Opus/Sonnet free-form runs that founded 2–3 cities). The harness is
-  model-agnostic; only `--model` / `--backend` changes.
-
-## Ollama / MLX (verified on this machine)
-- Ollama is **cross-platform** (wraps llama.cpp/GGUF; Metal on macOS, CUDA/CPU elsewhere) — the
-  reason we moved off the Apple-only MLX prototype.
-- **MLX is NOT used for GGUF text models here.** `llama3.2:1b` loads the GGML/**Metal** runner
-  (`ggml_metal_init`, "offloaded 17/17 layers to GPU" on the M3) — fully GPU-accelerated, but not
-  MLX. `OLLAMA_NEW_ENGINE=1` does **not** switch a GGUF text model to MLX (tested). This Ollama build
-  ships MLX (`mlx_metal_v3/v4`, an `mlxrunner`) but it's for image-generation / MLX-format models,
-  not GGUF text inference. So "Ollama + MLX for a 1B text LLM" isn't available; Metal is the accel.
-
-## Honest gaps
-- A full *constrained-vs-free-form play comparison on a capable model* wasn't run (usage). The
-  constrained smoke (Sonnet) founded a city by turn 2 like the free-form runs, suggesting no
-  regression, but the 50-turn capable-model constrained run is still open — cheapest via a larger
-  local model now that Ollama works.
-
-## Structured-output enforcement ("what are we doing wrong")
-We were only using Ollama `format:"json"` (syntactic JSON), **not a schema** — so the 1B could emit
-valid JSON with a *hallucinated* actor key and an arbitrary number. Fix: build a per-turn JSON
-Schema (`representation.menu_to_schema`) — one integer property per actor, each an `enum` of that
-actor's valid option numbers, **all actors `required`**, `additionalProperties:false` — and pass it
-as Ollama's `format` (grammar-constrained decoding). Invalid output can no longer be emitted.
-Threaded through `resolve_choices`; `OllamaContestant` enforces it, `ClaudeSubagentContestant`
-accepts-but-ignores (the CLI can't pass it; Claude follows the menu text fine).
-
-Effect (`llama3.2:1b`, local, free; per-turn averages):
-
-| metric | `format:"json"` (50t) | **schema (15t)** |
+| component | state | evidence |
 |---|---|---|
-| actors acted on / turn | 1.0 | **7.0 (all)** |
+| MCP server, 7 tools | works | `scripts/acceptance_check.py` drives one turn through all 7 tools over stdio |
+| Shared env layer (`core.CivRealmGame`) | works | both drivers run through it; acceptance test re-run after the refactor |
+| State representation | works | `REPRESENTATION.md`, `EXAMPLE_SHAPED_STATE.txt` |
+| Free-form mode (`--mode freeform`) | works; illegal rate is model-dependent | `runs/main`, `runs/sonnet-*` |
+| Constrained mode (`--mode constrained`, default) | works; **no illegal action can be applied** | `runs/constrained-smoke2`, `runs/local-llama1b-*` |
+| Retry feedback on invalid selections | works | `test_retry`: 6 tests / 28 assertions |
+| Score-based win rule | works | `test_winrule`: 3 tests / 9 assertions; `final_result` read at cap in every constrained run |
+| Two-side orchestrator | works — **with random contestants only** | `runs/orch-test1`, `runs/orch-test2` |
+| Local backend (Ollama) | works: `llama3.2:1b`, `qwen3:4b` | `runs/local-llama1b-*` (committed); `runs/probe-qwen-smoke2` (local only) |
+| **Two-LLM head-to-head** | **never run** | — |
+
+The last row is the one that matters when reading older notes: the orchestrator has been verified
+end-to-end, but only `random:1` vs `random:2` (`RandomContestant`, seeded, model-free). No game has
+ever been played between two models.
+
+## Verified — the MCP server
+
+- **Environment.** Python 3.11 venv (uv) with `civrealm==0.1.2` and its pins (`gymnasium 0.29.1`,
+  `selenium 4.9.1`, `tornado 6.3.2`, `ray 2.6.3`, `numpy 2.4.6`), plus `setuptools<81` because
+  ray 2.6.3 imports the removed `pkg_resources`. Docker `civrealm/freeciv-web:latest` (amd64)
+  runs under emulation on arm64; `curl http://localhost:8080/` → HTTP 200.
+- **Upstream smoke tests.** `test_civrealm --max_turns=2` runs a single-player game to
+  `Truncated: True`. The two-player variant (`--minp=2` + a second client on the same
+  `client_port=6001`) is provably **one** game: each client's log shows the other player
+  connecting, both share `mapseed 681897 / gameseed 950276`, and both print an identical final
+  4-player `game results` dict.
+- **Schema.** `SCHEMA.md` documents the observation dict (11 top-level keys), the `info` dict
+  (`turn`, `available_actions`, optional `llm_info`), the action 3-tuple
+  `(ctrl_type, actor_id, action_name)` with `None` = end-turn, and reward/terminated/truncated/
+  winner signalling. Derived from source, a real unpickled observation, and live runs.
+- **Server.** `src/civrealm_mcp/server.py` (official `mcp` SDK / FastMCP, stdio) owns one
+  `FreecivBaseEnv` and exposes `start_game`, `get_observation`, `get_legal_actions`,
+  `take_action`, `end_turn`, `get_status`, `close_game`. Model-agnostic; JSON in and out.
+- **Acceptance check.** `scripts/acceptance_check.py` spawns the server over stdio as a real MCP
+  client and runs start → observe → legal actions → take action → end turn → status → close, with
+  no GUI and no direct civrealm calls. Passes: e.g. `take_action(unit, 104, build_city)` then
+  `end_turn` advanced turn 1→2 with `last_reward: 1`, and `Reset with port: 6001` went to
+  **stderr**, proving stdout stays clean for JSON-RPC.
+
+### Bugs found and fixed during bring-up
+
+Each was reproduced by a failing run, fixed, then re-run green.
+
+1. **`pkg_resources` missing** (ray 2.6.3 on setuptools ≥81) → pin `setuptools<81`.
+2. **Apple-Silicon port conflict** — the default port map publishes `7000-7009`, but macOS
+   Control Center (AirPlay Receiver) owns 7000 → publish only `8080:80`, the one host port the
+   client dials. The acceptance test connecting is the regression check.
+3. **`This event loop is already running`** — CivRealm drives a tornado IOLoop inside
+   `reset()/step()`, colliding with FastMCP's asyncio loop → offload every env call to one
+   dedicated worker thread. The acceptance test failed on this and passes after the fix.
+4. **`BeginTurnTimeout` in the server** — don't override `multiplayer_game`; raise
+   `begin_turn_timeout` to 120s to absorb emulation latency.
+
+## Verified — the play loop
+
+**Representation** (`playloop/representation.py`) condenses the raw observation into a strategic
+summary, the player's cities and units, and per-actor **exact legal actions**, with cryptic
+`goto_*` keys annotated by compass direction. The full raw snapshot for turn 1 is kept in each
+transcript so raw→shaped stays debuggable.
+
+**Contestant** (`playloop/contestant.py`) is one pluggable slot with four implementations:
+`ClaudeSubagentContestant` (spawns an isolated `claude -p ... --output-format json` per turn, tools
+disabled — no paid API key needed; the schema goes to `--json-schema`, which the CLI *validates and
+retries* rather than constraining the decoder), `AnthropicSDKContestant` (Messages API,
+`output_config.format`, genuinely decoder-constrained — needs `ANTHROPIC_API_KEY`, and has no
+committed run), `OllamaContestant` (local GGUF model, schema-constrained decoding), and
+`RandomContestant` (seeded, model-free, for testing the harness).
+
+**Constrained selection** is the default. `build_choice_menu()/render_menu()` emit a per-actor
+numbered menu keyed `unit:104` / `city:110` / `tech:cur_player` / `gov:0`, option `0` = skip;
+`menu_to_schema()` turns that menu into a per-turn JSON Schema — one integer property per actor,
+each an `enum` of that actor's valid option numbers, all actors `required`,
+`additionalProperties:false`. Where that schema is *enforced* differs by backend — Ollama's
+`format` and the Messages API's `output_config.format` constrain the decoder; the `claude` CLI's
+`--json-schema` validates and retries (see README's backend table). Independent of backend, the
+contestant returns option *numbers*, so action strings never originate from the model, and
+`apply_constrained` resolves numbers through the menu index and returns `illegal: 0` structurally.
+
+One honest wrinkle: a choice can go **stale** *within* a turn — legal when the menu was built, no
+longer legal after an earlier same-turn action moved a stacked unit. The first constrained smoke
+(`runs/constrained-smoke`) tagged 2 such cases `illegal_stale` (a `build_road` and an `irrigation`
+on stacked units) and still counted them in the illegal tally, hence its 0.222. They now get their
+own `stale` counter and are skipped, which is what they always were: nothing illegal reached the
+board in that run either.
+
+**Retry feedback.** An invalid selection (bad option number, unknown actor key) returns an error
+that enumerates the acceptable options for those actors and retries, merging only the corrected
+actors, up to `max_retries`. `invalid_selections()` and `build_feedback()` are pure;
+`resolve_choices()` drives them.
+
+**Win rule** (`playloop/winrule.py`). `get_final_result(game)` reads end-of-game metrics
+(score/cities/techs/population/units) from the observation at the cap. `decide_winner(A, B)` is
+pure: higher primary (score) wins, tiebreak `cities → techs → population → units`; cap and primary
+metric are configurable.
+
+**Orchestrator** (`playloop/orchestrate.py`). The hard part is turn handoff without deadlock: env
+calls block on the tornado IOLoop, and in a 2-player game they block on *each other*
+(`gameB.reset()` waits for A's first phase; `A.end_turn()` waits for B's phase). One shared worker
+thread deadlocks, so each side gets its own thread; freeciv's sequential phases serialize the
+active side; a `query_lock` guarantees only one contestant is queried at a time;
+`begin_turn_timeout` (120s) plus a `join` timeout turn a hang into a reported truncation; and side
+A starts first (plus a delay) so A is deterministically player 0.
+
+Orchestration results (`runs/orch-test1`, `runs/orch-test2` — both `random:1` vs `random:2`, cap 4,
+seed 42, ~19s wall-clock — observed while running, not recorded in `orchestration.json`): full
+2-player game with strict A↔B alternation every turn, 6–8 actions per side per
+turn, **illegal 0 / stale 0 all game**. The winner path runs end to end: both scores read at the
+cap, 0–0 → tiebreak on techs → winner **A**, mapped to the correct side (B's player had been
+eliminated: units 0, terminated). Re-running the same seed gives an identical verdict and identical
+per-player final score/techs/cities/population/units; the only difference is the losing side's final
+*turn* counter (6 vs 5), a thread-handoff timing artifact `decide_winner` does not read.
+
+### Offline test suites (no env, no model, no cost)
+
+`pytest` from the repo root collects and runs all four (`test_winrule` 3, `test_retry` 6,
+`test_orchestrate` 2, `test_ollama_think` 4): **15 tests, green**, with no CivRealm, no
+numpy, no network, no Docker, no model and no API key installed (CI does exactly this on 3.10 and
+3.11). Each is still runnable alone with `.venv/bin/python -m playloop.test_<name>`.
+
+## Measured runs
+
+Rows whose run directory is **committed** have a `summary.json` you can open at
+`playloop/runs/<run>/`; the four marked *(local only)* were run on the author's machine and are
+gitignored, so their numbers are reported here but cannot be checked from a clone.
+
+| run | contestant | mode | turns | illegal rate | score | cities | cost |
+|---|---|---|---|---|---|---|---|
+| `main` | claude-opus-4-8 | freeform | 50 | **16.6%** (100/603) | 16 | 3 | $4.77 |
+| `sonnet-baseline` | claude-sonnet-4-6 | freeform | 30 | 1.3% (3/227) | 10 | 2 | $2.02 |
+| `sonnet-fixed` | claude-sonnet-4-6 | freeform, fixed repr | 30 | **0.0%** | 10 | 2 | $1.80 |
+| `constrained-smoke` *(local only)* | claude-sonnet-4-6 | constrained (pre-`stale`) | 2 | 0 illegal applied (2 stale) | 1 | 1 | $0.17 |
+| `constrained-smoke2` | claude-sonnet-4-6 | constrained | 2 | **0.0%** | 1 | 1 | $0.13 |
+| `local-smoke` *(local only)* | llama3.2:1b | constrained | 2 | 0.0% | 0 | 0 | $0 |
+| `local-llama1b-50turn` | llama3.2:1b | constrained, `format:"json"` | 50 | **0.0%** | 0 | 0 | $0 |
+| `local-llama1b-schema` | llama3.2:1b | constrained, JSON Schema | 15 | **0.0%** | 0 | 0 | $0 |
+| `probe-qwen-smoke` *(local only)* | qwen3:4b (`think` on) | constrained | 2 | n/a — 0 actions emitted | 0 | 0 | $0 |
+| `probe-qwen-smoke2` *(local only)* | qwen3:4b (`think=False`) | constrained | 2 | 0.0% | 1 | 1 | $0 |
+
+`runs/constrained-haiku50` and `runs/constrained-sonnet50` are abandoned 50-turn attempts (5 and 3
+turns of `metrics.jsonl`, no `summary.json`) — stopped to conserve API usage, not results.
+
+### What the Opus free-form run actually showed
+
+50/50 turns, no crash, score 0 → 16, 3 cities (turns 1, 4, 23), units 5 → 13, and 193 unit moves /
+96 terrain improvements / 67 city-production actions / 48 research actions / 3 attacks / 2 huts.
+It plays; it does not no-op or end turns immediately. Turns 1–13 are near-flawless.
+
+**92 of the 100 illegal proposals are a single confusion** (verified against the transcript): the
+model reaches for `fortify` to hold a unit, but for a unit mid-activity the legal hold action is
+`keep_activity`/`cancel_order`. All 92 had `keep_activity` listed in that unit's own presented
+action list. The other 8 were 6 blocked-direction `goto`s plus 2 misc. It worsens late-game only
+because there are more idle units to mishandle.
+
+Framing that still holds: **illegal proposals were never executed.** The loop validates every move
+against `info['available_actions']` and applies only legal ones, so gameplay was always valid. The
+16.6% measures how faithfully a model copies from the presented options — a diagnostic, not bad
+moves reaching the board. Free-form was left unconstrained precisely so it could surface gaps like
+this one; constrained mode is the answer to the gap.
+
+### What the Sonnet A/B showed
+
+Annotating hold/idle actions in the representation (`keep_activity [hold: stay put]`,
+`fortify [hold: dig in]`) and steering the prompt to "use the HOLD action in THAT unit's list" took
+Sonnet 1.3% → 0.0% over 30 turns with no loss of play (2 cities, 138 moves, 52 terrain
+improvements). No silent aliasing was added, so the rate still honestly measures adherence.
+
+The more interesting finding: Sonnet made **zero** `fortify` mistakes on the *original*
+representation — its 3 illegals were all blocked-direction `goto`s. The 16.6% was Opus
+idiosyncratically defaulting to `fortify`, not a representation flaw: same representation, very
+different adherence. Hence constrained selection rather than per-model
+prompt tuning. The Opus projection (92/100 resolved → ~1.3%) was never re-run live; the A/B used
+Sonnet to conserve usage.
+
+### What the local-model runs showed
+
+The harness is model-agnostic and the guarantee holds with a genuinely weak model: 50/50 turns with
+`llama3.2:1b`, illegal 0.0 every turn, $0. But structure is not competence.
+
+With `format:"json"` only (syntactic JSON, no schema) the 1B emitted valid JSON containing
+hallucinated actor keys — on turn 1 its stated plan was literally "build_city" and it returned
+`{"unit:102": 2, "city:110": 2}`, where option 2 for unit:102 is `plant` and `city:110` did not
+exist (0 cities that turn). Adding the per-turn schema fixed the structural problems outright:
+
+| metric (per turn) | `format:"json"` (50t) | JSON Schema (15t) |
+|---|---|---|
+| actors acted on (of 8 offered) | 1.0 | **7.0** (+1 explicit skip) |
 | `unknown_actor` (hallucinated) | 50 | **0** |
 | retries needed | 100 | **0** |
 | illegal | 0 | 0 |
 
-Structural problems (coverage, hallucination, retries) — **fully fixed**. But the 1B still founded
-**0 cities / score 0** over 15 turns: it now makes legal, complete choices but poor ones (moves,
-improves terrain, sets research/gov; never picks `build_city` for its Settlers). Direct probe:
-told "pick option 4 (build_city)" it returned a schema-valid **0 (skip)**. ⇒ residual gap is **1B
-judgment, not format**. Use a 7–8B local model or `--backend claude` for competent play. Runs:
-`playloop/runs/local-llama1b-50turn` (no schema) vs `playloop/runs/local-llama1b-schema` (schema).
-Verified by `playloop/test_retry.py` (schema shape) + a direct Ollama schema probe.
+The residual gap is 1B judgment, not format: it now makes legal, complete choices and poor ones —
+it moves, improves terrain, sets research and rates, and never picks `build_city` for its Settlers
+(0 cities, score 0 over 15 turns). Told directly to "pick option 4 (build_city)" it returned a
+schema-valid `0` (skip). Competent local play needs a bigger model.
 
----
+`qwen3:4b` is that next step and needed one fix: 4B "thinking" models spend the whole
+`num_predict` budget on the hidden `message.thinking` channel and return **empty**
+`message.content` (`done_reason=length`) — no answer at all. `probe-qwen-smoke` shows the failure
+(`ollama: no JSON parsed`, 0 actions, both turns). With `think=False` (now the default; harmless on
+non-thinking models like `llama3.2:1b`) `probe-qwen-smoke2` founds a city and applies 11 actions
+over 2 turns. `test_ollama_think` locks the payload shape in with a fake transport.
 
-# Update (2026-06-15c): Two-agent orchestration — verified end-to-end
+### Ollama / MLX, verified on this machine
 
-The prime objective: two contestants, ONE shared game, a decided winner. `playloop/orchestrate.py`.
+Ollama is cross-platform (llama.cpp/GGUF; Metal on macOS, CUDA/CPU elsewhere), which is why the
+Apple-only MLX prototype was dropped. **MLX is not used for GGUF text models here:** `llama3.2:1b`
+loads the GGML/Metal runner (`ggml_metal_init`, "offloaded 17/17 layers to GPU" on an M3) —
+fully GPU-accelerated, but not MLX. `OLLAMA_NEW_ENGINE=1` does not switch a GGUF text model to MLX
+(tested). This build ships MLX (`mlx_metal_v3/v4`, an `mlxrunner`) for image-generation and
+MLX-format models, not GGUF text inference.
 
-## Design — the hard part: turn handoff without deadlock
-Env calls block (tornado IOLoop), and in a 2-player game they block on *each other*
-(`gameB.reset()` waits for A's first phase; `A.end_turn()` waits for B's phase). A single shared
-worker thread deadlocks, so:
-- **one thread per side** — both `reset()`s block concurrently until the game starts, and one
-  side's blocking `end_turn` doesn't stall the other;
-- **freeciv's sequential phases serialize the active side** (B's thread stays blocked until B's
-  phase), plus a `query_lock` guarantees only ONE contestant is queried at a time;
-- **anti-hang:** `begin_turn_timeout` (120s) makes a stuck `end_turn` return truncated instead of
-  hanging; the orchestrator also `join`s with a timeout and reports a hang;
-- side A starts first (+delay) so A=player 0, B=player 1 **deterministically**.
+## Not done / known limitations
 
-## Test fixture
-`RandomContestant` (`contestant.py`): uniform-random over each actor's legal option numbers (read
-from the per-turn schema enums), seeded, **model-free** — so any wrong result is unambiguously the
-orchestrator's fault.
+- **No two-LLM head-to-head.** The orchestrator is verified only with random contestants. Also
+  absent: brackets, Elo or any rating, multi-game fairness.
+- **No capable-model constrained 50-turn run.** Constrained smokes founded a city by turn 2 like
+  the free-form runs, suggesting no regression, but a full constrained-vs-free-form comparison on a
+  capable model has not been run. Cheapest path now is a 7–8B local model.
+- **Emulation is slow.** The amd64 image runs under emulation on arm64: `reset()` takes ~10-30s and
+  a turn a few seconds. No arm64 image is published.
+- **Stale game on a port.** If `reset()` crashes mid-connection the in-container civserver for that
+  `client_port` can stick, and the next `start_game` may `BeginTurnTimeout`. Workaround: restart the
+  container, or use a different `client_port` (6001 or 6300-6331). No auto-recovery.
+- **Large observations.** `get_observation()` with no `keys` includes the `map` arrays (a
+  `(X, Y, 52)` unit array ≈ 200k ints). Pass `keys=["unit","player","city",...]`.
+- **Winner detection.** `terminated` covers defeat and game-over flags; the per-player `winner`
+  appears in `get_status` only once the server sends the endgame packet. Mid-game victory-condition
+  termination for one's own player is not implemented upstream (`# FIXME: check victory
+  conditions.` in civrealm). The score-based win rule at a turn cap exists because of this.
+- **Single client, single env.** The server owns one env and serializes tool calls on one worker
+  thread — right for one driver, not built for concurrent clients.
+- **No `llm_info`.** The server wraps `FreecivBase-v0` (raw obs); the human-readable
+  `info['llm_info']` from `FreecivLLM-v0`/`LLMWrapper` is not exposed.
 
-## Verified (RandomContestant vs RandomContestant; `playloop/runs/orch-test1`, `orch-test2`)
-- **Full 4-turn 2-player game, no hang (~19 s).** Strict alternation A↔B every turn (`turnlog.txt`),
-  both players acting 6–8 actions/turn, **illegal 0 / stale 0 all game** (schema-constrained).
-- **Winner path runs end-to-end (first time ever):** both scores read at the cap; score 0–0 →
-  tiebreak on **techs** → winner **A (`random:1`)**, mapped to the correct side. (B's player was
-  eliminated — units 0, terminated — consistent with the tiebreak.)
-- **Tie/tiebreak resolves without crashing** — the real game hit the 0–0-score → techs path; the
-  full-tie → `"tie"` path is unit-tested.
-- **Determinism:** same seed twice → **identical verdict + identical per-player final
-  score/techs/cities/population/units + identical winner label**. The only difference is the losing
-  side's final *turn* counter (6 vs 5), a thread-handoff timing artifact not used by `decide_winner`.
+## Next steps, in order
 
-## Tests (free, no env/model): `test_winrule` 8/8 · `test_retry` 17/17 · `test_orchestrate` 6/6.
+1. **A real head-to-head:** swap `RandomContestant` for two model contestants in
+   `orchestrate.py` — the slot is already pluggable and the win rule already decides. Cheapest
+   first pass is `qwen3:4b` vs `qwen3:4b` (free, local, now that `think=False` works).
+2. **A capable constrained 50-turn baseline** for the constrained-vs-free-form comparison.
+3. **Lifecycle hardening:** auto-pick a free `client_port`, detect and restart stuck ports,
+   optionally manage the Docker container from the server.
+4. Only then rating/brackets — none of which belong in the single-env MCP server.
 
-## Out of scope (not done, per task)
-Competent-play / Claude / 7–8B demos, brackets, Elo/rating, multi-game fairness, lifecycle polish.
-`qwen3:4b` and `gemma4:e4b` are pulled and ready (Ollama) for that next phase. Reproduce:
-`.venv/bin/python -m playloop.orchestrate --cap 6 --seed 42 --side-a random:1 --side-b random:2`.
+## Reproduce
+
+Docker server up first (see `SETUP.md`) for everything that touches a game; the offline suites
+need neither Docker nor a model.
+
+```bash
+# the MCP path
+.venv/bin/python tests/acceptance_test.py
+
+# play loop: claude backend, constrained mode (both defaults)
+.venv/bin/python -m playloop.loop --max-turns 50
+.venv/bin/python -m playloop.loop --backend local --model qwen3:4b --max-turns 15   # needs Ollama
+
+# two sides, one game, decided winner
+.venv/bin/python -m playloop.orchestrate --cap 6 --seed 42 --side-a random:1 --side-b random:2
+
+# offline suites (free, no env): winrule / retry / orchestrate / ollama_think
+.venv/bin/python -m playloop.test_winrule
+```
+
+## Changelog
+
+| date | commit | change |
+|---|---|---|
+| 2026-06-14 | `89f8c86` | Minimal MCP server over a single CivRealm env, plus `SCHEMA.md`, `SETUP.md`, acceptance test |
+| 2026-06-15 | `a45efdf` | Single-agent play loop (viability probe) + `core.py` shared env layer; MCP acceptance re-run green after the refactor |
+| 2026-06-15 | `5013c53` | Hold-action representation fix + Sonnet 4.6 A/B (1.3% → 0.0%) |
+| 2026-06-15 | `2fdeca5` | Constrained action selection + score-based win rule |
+| 2026-06-15 | `a4bccc5` | Retry-feedback loop + cross-platform local contestant (Ollama) |
+| 2026-06-15 | `4105025` | Local 1B 50-turn run + Ollama/MLX findings |
+| 2026-06-15 | `1690e77` | Structured-output enforcement: per-turn JSON Schema, one enum per actor |
+| 2026-06-15 | `b49c51f` | `test_retry`: accept the schema kwarg in `MockContestant` |
+| 2026-06-15 | `69cd5f6` | Two-agent orchestration: two contestants, one shared game, decided winner (random contestants) |
+| 2026-06-15 | `2f93f69` | Fix 4B thinking models returning empty output (`think=False`) |
+| 2026-06-15 | `e4c4732` | `--seed` for reproducible games + per-turn techs logging |
